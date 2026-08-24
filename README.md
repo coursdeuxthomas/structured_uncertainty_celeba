@@ -81,6 +81,18 @@ python download.py   # renseigner ses identifiants Kaggle au préalable
 | `denoise.py` | l'application §5.3 (projection du résidu) |
 | `main.py` | orchestration |
 
+Diagnostics et outillage :
+
+| Fichier | Rôle |
+|---|---|
+| `verifier_alignement.py` | preuve empirique de l'alignement des visages |
+| `verifier_residu.py` | **la vérification critique** : structure du résidu |
+| `build_data.bash` | job SLURM de construction du cache |
+| `PROCEDURE.md` | récupérer les images et construire le cache |
+| `explication_data.txt` | commentaire détaillé de `data.py` |
+| `explication_dncnn.txt` | commentaire détaillé de l'étape 1 |
+| `tuteur.txt` | notes de présentation : modèle, chiffres, décisions |
+
 ## Entraînement en deux temps
 
 Le DnCNN est entraîné **puis gelé**. Le réseau de covariance est entraîné
