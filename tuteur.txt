@@ -157,6 +157,16 @@ log_diag de taille [4096] et un tenseur offdiag de taille [4096, 24].
 L'hypothese implicite : les dependances a longue portee sont negligeables
 devant les dependances locales. C'est raisonnable pour de la texture.
 
+ET CE N'EST PAS QU'UNE HYPOTHESE : ON L'A MESUREE. Le 24 aout, sur le residu
+d'un DnCNN entraine 3 epochs, l'autocorrelation spatiale passe sous 0,1 a un
+rayon de 3 PIXELS. Or un patch 7x7 couvre exactement +/- 3 pixels autour de
+chaque pixel : (7 - 1)/2 = 3.
+
+Autrement dit, la portee mesuree des correlations coincide avec la demi-largeur
+du motif de l'article. f = 7 n'est donc pas un chiffre repris par confiance,
+c'est la valeur que la mesure aurait suggeree. C'est le meilleur argument du
+projet a ce stade — a placer en premier si le tuteur demande d'ou vient f.
+
 
 ================================================================================
 4. LES CHIFFRES A CONNAITRE PAR COEUR
@@ -198,6 +208,15 @@ LE DEBRUITEUR (DnCNN)
     (= 20 * log10(255/25) : verifiable a la main, et affiche au demarrage
      comme controle de coherence des echelles)
   PSNR attendu apres entrainement               = 29 a 32 dB (indicatif)
+
+LE RESIDU, MESURE LE 24 AOUT (DnCNN a 3 epochs seulement)
+  Ecart-type du bruit ajoute                    = 0,1961
+  Ecart-type du residu r = x - mu               = 0,0698
+    -> soit un PSNR de 29,1 dB, contre 20,17 pour l'image bruitee : +9 dB
+  Autocorrelation de r a 1 pixel, horizontale   = 0,537
+  Autocorrelation de r a 1 pixel, verticale     = 0,576
+  Temoin bruit blanc, meme calcul               = -0,001
+  Portee (rayon ou l'autocorrelation < 0,1)     = 3 pixels
 
 L'ENTRAINEMENT (valeurs de l'article)
   lr                                            = 1e-3
@@ -454,13 +473,16 @@ FAIT
   [x] Chaine testee de bout en bout sur un faux cache : entrainement,
       reprise, diagnostic
 
+  [x] DnCNN entraine 3 epochs sur le cluster (run court de validation)
+  [x] VERIFICATION CRITIQUE PASSEE, ET LARGEMENT.
+      Autocorrelation du residu a 1 pixel : 0,54 horizontal et 0,58 vertical,
+      contre -0,001 pour un temoin de bruit blanc. Portee 3 pixels. Le residu
+      montre a l'oeil les cheveux, les contours des yeux, la bouche, le bord
+      du chapeau. Il y a bien une structure a apprendre.
+      Figure : results/residu.png
+
 A FAIRE, DANS CET ORDRE
-  [ ] Entrainer le DnCNN : run court de 3 epochs d'abord, puis le run complet
-  [ ] VERIFICATION CRITIQUE : afficher r = x - DnCNN(y).
-      Le residu DOIT contenir des structures visibles (contours, cheveux,
-      texture) et son autocorrelation spatiale doit s'etaler sur plusieurs
-      pixels. S'il ressemble a du bruit blanc, LE PROJET N'A PAS D'OBJET.
-      Ne pas coder la suite avant d'avoir passe ce test.
+  [ ] Run complet du DnCNN : 50 epochs, trois jobs avec --resume
   [ ] loss.py : repris du projet ellipses avec f = 7, tests relances,
       clamp log_diag.clamp(-10, 10) a ajouter
   [ ] cov_model.py : U-Net 3 niveaux, tete a 25 canaux
@@ -571,6 +593,13 @@ R. f = 7 donne (49-1)/2 = 24 voisins dans le triangle inferieur, plus la
    diagonale. Augmenter f augmente la portee des correlations modelisees et le
    cout lineairement en f^2. 7 est la valeur de l'article.
 
+Q. Pourquoi f = 7, et pas 5 ou 11 ?
+R. C'est la valeur de l'article, mais on l'a verifiee. L'autocorrelation
+   mesuree du residu passe sous 0,1 a 3 pixels, et un patch 7x7 couvre
+   exactement +/- 3 pixels. Un f plus petit tronquerait des correlations
+   reelles ; un f plus grand depenserait des parametres sur des correlations
+   deja nulles. Le cout croit en f^2.
+
 Q. Quelle est la limite de cette approche ?
 R. Le motif creux suppose que les dependances a longue portee sont
    negligeables. C'est raisonnable pour de la texture, discutable pour des
@@ -629,11 +658,14 @@ LES VARIABLES D'ENVIRONNEMENT
 12. CE QUI RESTE INCERTAIN
 ================================================================================
 
-LA VERIFICATION CRITIQUE N'EST PAS FAITE.
-  Tant qu'on n'a pas regarde r = x - DnCNN(y), on ne sait pas si le projet a
-  un objet. Si le residu ressemble a du bruit blanc, il n'y a pas de structure
-  a apprendre et tout le reste tombe. C'est la premiere chose a faire apres
-  train_dncnn.py, et il faut la faire avant d'ecrire une ligne de plus.
+LA VERIFICATION CRITIQUE EST PASSEE (24 aout). Le risque principal du
+  projet est leve : le residu est structure, il y a quelque chose a apprendre.
+
+  Reserve honnete a mentionner : la mesure a ete faite sur un DnCNN entraine
+  seulement 3 epochs. Un debruiteur mieux entraine retire moins de detail, donc
+  la composante structuree de r sera PLUS FAIBLE apres 50 epochs. Il faudra
+  refaire la mesure sur le modele final. La conclusion qualitative ne devrait
+  pas changer, mais les chiffres si.
 
 LA STABILITE NUMERIQUE DE LA NLL.
   Le clamp log_diag.clamp(-10, 10) manquait dans le projet ellipses. Sans lui,
