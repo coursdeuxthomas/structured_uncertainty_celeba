@@ -9,7 +9,7 @@ et les mêmes conventions :
 
 | Projet | Données | Dépôt |
 |---|---|---|
-| splines | 1D | [structured_uncertainty](https://github.com/coursdeuxthomas/structured_uncertainty) |
+| splines | 1D | [structured_uncertainty](https://github.com/coursdeuxthomas/structured_uncertainty_spline) |
 | ellipses | 2D synthétique | *(local)* |
 | **celebA** | **2D réel, débruitage** | **ce dépôt** |
 
