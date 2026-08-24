@@ -1,0 +1,533 @@
+================================================================================
+CelebA + DnCNN — CE QUE C'EST, ET DANS QUEL ORDRE LE CONSTRUIRE
+Structured Uncertainty Prediction Networks (Dorta et al. 2018), §5.2 et §5.3
+================================================================================
+
+SOMMAIRE
+  PARTIE 1 — Ce que fait l'article dans §5.2 / §5.3
+  PARTIE 2 — Votre variante DnCNN : ce qui change, ce qui tient
+  PARTIE 3 — LE MUR TECHNIQUE : 16×16 -> 64×64
+  PARTIE 4 — Ordre de construction, phase par phase
+  PARTIE 5 — Arborescence de fichiers proposee
+  PARTIE 6 — Les pieges que vous allez rencontrer
+
+
+################################################################################
+PARTIE 1 — CE QUE FAIT L'ARTICLE DANS §5.2 / §5.3
+################################################################################
+
+================================================================================
+1.1 Le montage
+================================================================================
+
+    DONNEES
+      CelebA « aligned & cropped », recadre puis redimensionne en 64×64,
+      converti en NIVEAUX DE GRIS.
+      202 599 images -> 182 637 train / 19 962 test (split officiel).
+
+    ETAPE 1 — un modele generatif, entraine PUIS GELE
+      Un autoencodeur (AE, entraine en MSE) et un VAE, architecture de [21].
+      Ils produisent, pour chaque image : un code latent z et une
+      reconstruction mu(z).
+
+    ETAPE 2 — un reseau de covariance, entraine SEPAREMENT
+      Entree  : z (le code latent)
+      Sortie  : les valeurs non nulles de la Cholesky creuse de la precision
+      Voisinage : 7×7  ->  m = (49-1)/2 = 24 hors-diagonale, + 1 diagonale = 25
+      Architecture : un bloc initial semblable au DECODEUR du VAE, puis un
+                     second bloc de quatre couches convolutionnelles.
+      lr 1e-3, 50 epochs, batch 64.
+
+    LE RESIDU MODELISE
+      r = x - mu(z),  c'est-a-dire l'ERREUR DE RECONSTRUCTION du modele
+      generatif. Pas du bruit d'acquisition : ce que le modele a rate.
+
+L'equation 4 de l'article est explicite sur le caractere en deux temps :
+
+    « We optimize the log-likelihood with respect to psi
+      KEEPING THE GENERATIVE MODEL PARAMETERS THETA FIXED »
+
+Le modele generatif n'est jamais reentraine. C'est une bonne nouvelle pour vous :
+les deux entrainements sont independants et se deboguent separement.
+
+================================================================================
+1.2 Le chiffre qui justifie tout
+================================================================================
+
+    n = 64 × 64 = 4 096 pixels
+
+    Cholesky DENSE  : n(n+1)/2       = 8 390 656 valeurs par image
+    Cholesky CREUSE : n((f²-1)/2 + 1) =   102 400 valeurs par image
+                                          (4096 × 25)
+
+    facteur de compression : 82
+
+Ces deux nombres sont ceux de l'article (§5.2). C'est LA justification de toute
+la methode : predire 8.4 millions de valeurs par image est absurde, en predire
+102 400 avec une convolution 1×1 a 25 canaux est banal.
+
+================================================================================
+1.3 L'experience de debruitage (§5.3) — celle qui vous interesse
+================================================================================
+
+La procedure de l'article, en quatre temps :
+
+    1. une image bruitee `x_bruit` est reconstruite par un VAE
+       (VAE qui n'a JAMAIS vu de donnees bruitees)  ->  mu
+
+    2. on calcule la difference     s = x_bruit - mu
+       Elle contient DEUX choses melangees : le bruit, et le detail
+       haute-frequence que le VAE a perdu.
+
+    3. on PROJETTE s sur Sigma_chapeau, construite avec les 1000 vecteurs
+       propres de Sigma associes aux plus grandes valeurs propres.
+
+    4. resultat final :  mu + f(s)
+
+L'HYPOTHESE, et c'est l'idee elegante du papier :
+
+    « our predicted covariance matrices will only span the space of VALID FACE
+      RESIDUALS, thus projecting a noisy residual in that space will remove
+      the noise »
+
+Autrement dit : Sigma decrit la forme des residus PLAUSIBLES pour un visage.
+Le bruit blanc, lui, ne ressemble a aucun residu plausible. Projeter sur le
+sous-espace dominant de Sigma garde donc le detail et jette le bruit.
+
+Resultat rapporte (Table 4, MSE sur les 2000 premieres images de test) :
+    DAE   : 5.13e-3 ± 2.52e-3
+    Ours  : 2.99e-3 ± 7.98e-4
+soit environ 40 % d'erreur en moins qu'un autoencodeur debruiteur.
+
+
+################################################################################
+PARTIE 2 — VOTRE VARIANTE DnCNN : CE QUI CHANGE, CE QUI TIENT
+################################################################################
+
+================================================================================
+2.1 Le probleme apparent : DnCNN n'a pas de z
+================================================================================
+
+DnCNN (Zhang et al., 2017) est un reseau residuel plat : pas d'encodeur, pas de
+goulot d'etranglement, pas de code latent. Il prend une image bruitee `y` et
+predit le bruit ; la sortie est `mu = y - DnCNN(y)`.
+
+Or l'article dit que l'entree du reseau de covariance est z.
+
+================================================================================
+2.2 La solution, donnee par l'article lui-meme
+================================================================================
+
+§5 (« Results »), a propos des experiences synthetiques :
+
+    « for the synthetic experiments we SKIP THE USE OF A GENERATIVE MODEL, and
+      directly predicting Sigma from mu. This means that THE INPUT TO OUR
+      COVARIANCE PREDICTION NETWORK IS mu. »
+
+Vous prenez donc la voie mu, exactement comme dans l'experience des ellipses que
+vous avez deja codee. Ce n'est pas un contournement : c'est l'un des deux
+regimes prevus par les auteurs.
+
+    ellipses  : entree = mu (image 16×16)      <- ce que vous avez fait
+    CelebA/AE : entree = z  (code latent)      <- l'article
+    CelebA/DnCNN : entree = mu (image 64×64)   <- votre variante
+
+Consequence tres favorable : votre `model.py` actuel a la BONNE FORME. Il prend
+une image, il sort 1 + m canaux par pixel. Il faut l'agrandir, pas le
+reconcevoir.
+
+================================================================================
+2.3 Ce que devient le residu — et pourquoi c'est mieux motive
+================================================================================
+
+    article  : r = x_propre - mu(z)      erreur de RECONSTRUCTION du VAE
+    vous     : r = x_propre - DnCNN(y)   erreur de DEBRUITAGE
+
+Dans les deux cas, `r` est ce que le modele a perdu : les hautes frequences, la
+texture, les cheveux, les dents. Exactement le meme objet conceptuel.
+
+Votre montage est meme plus DIRECT que le §5.3 de l'article. L'article doit
+passer par un VAE qui n'a jamais vu de bruit, puis bricoler une difference entre
+l'entree bruitee et la reconstruction. Vous, vous avez un vrai debruiteur dont
+vous modelisez directement l'erreur.
+
+La phrase a retenir pour votre presentation :
+
+    DnCNN enleve le bruit ET le detail. Le modele de covariance apprend a quoi
+    ressemble le detail perdu, ce qui permet de le remettre — sans remettre le
+    bruit.
+
+================================================================================
+2.4 Ce que vous perdez, et qu'il faut assumer
+================================================================================
+
+Sans modele generatif, trois experiences de l'article deviennent impossibles :
+
+    * echantillonnage depuis le prior latent (Fig. 8, beta-VAE) ;
+    * interpolation dans l'espace latent (Fig. 9) ;
+    * la borne superieure de la NLL marginale (Table 3), qui integre
+      numeriquement sur z avec 500 echantillons par image.
+
+Ce n'est pas grave si votre objectif est le debruitage — mais dites-le
+explicitement en presentation, plutot que de laisser croire a un oubli.
+
+Ce que vous GARDEZ, et qui suffit largement :
+    * la NLL sur donnees de test (la metrique centrale) ;
+    * la comparaison contre une reference DIAGONALE (l'argument decisif) ;
+    * les reconstructions avec residu echantillonne (Fig. 7 / 19) ;
+    * les cartes de variance diagonale vs structuree (Fig. 10) ;
+    * tout le §5.3 debruitage, avec une MSE comparable a la Table 4.
+
+================================================================================
+2.5 Une decision a prendre : que voit le reseau de covariance ?
+================================================================================
+
+Trois options, par ordre croissant d'information :
+
+    (a) mu seul                    = le denoise. Fidele a l'article. A FAIRE EN
+                                     PREMIER.
+    (b) mu et y concatenes         = le denoise + l'image bruitee (2 canaux
+                                     d'entree).
+    (c) mu, y, et le bruit predit  = tout ce que DnCNN a produit.
+
+Argument pour (b) : l'incertitude du debruiteur depend de la quantite de bruit
+qu'il avait a traiter, information presente dans `y` mais partiellement effacee
+dans `mu`. Il y a de bonnes chances que (b) donne une meilleure NLL.
+
+Argument pour commencer par (a) : c'est le protocole de l'article, donc la
+reference. L'ecart (b) - (a) devient alors un RESULTAT EXPERIMENTAL a vous,
+pas une deviation non justifiee. C'est le genre de petite contribution qui
+valorise un rapport de stage.
+
+  ATTENTION : ne donnez JAMAIS `x_propre` au reseau de covariance. Il pourrait
+  reconstruire `r = x - mu` directement et la NLL s'effondrerait vers -infini
+  sans rien apprendre. C'est la seule facon de tout casser silencieusement.
+
+
+################################################################################
+PARTIE 3 — LE MUR TECHNIQUE : 16×16 -> 64×64
+################################################################################
+
+C'est le point que vous allez heurter, et il vaut mieux le savoir avant
+d'ecrire du code.
+
+    n passe de 256 a 4096, soit ×16.
+    Tout ce qui est en n² est donc multiplie par 256.
+
+    UNE matrice dense n×n en float32 :
+        16×16 :  256²  × 4 =  262 ko    -> anodin
+        64×64 : 4096²  × 4 = 67.1 Mo    -> un batch de 64 = 4.3 Go
+
+CONSEQUENCE DIRECTE : votre `eval.py` actuel NE PASSE PAS A L'ECHELLE.
+
+    build_L_dense       -> 67 Mo par exemple
+    torch.linalg.inv    -> O(n³) = 6.9e10 flops par image
+    Sigma_pred          -> impossible a stocker pour 19 962 images
+
+Il faut donc, des le depart, ecrire l'evaluation SANS JAMAIS FORMER Sigma.
+
+CE QUI RESTE POSSIBLE, et qui suffit :
+
+    NLL                      via apply_LT              O(n·m)    OK
+    test de calibration      via w = L^T r             O(n·m)    OK
+    echantillonnage          resoudre L^T eps = u      O(n²) creux, OK
+    cartes de variance       diag(Sigma) seulement     a calculer astucieusement
+    projection du residu     voir Partie 4, phase 7
+
+Bonne nouvelle : `loss.py` a ete ecrit exactement pour ca. `apply_LT` ne
+construit jamais de matrice n×n. C'est la partie de votre code qui passe a
+l'echelle SANS AUCUNE MODIFICATION autre que les constantes.
+
+Mauvaise nouvelle : `build_L_dense` et `predicted_precision_and_covariance`
+deviennent inutilisables en pratique. Gardez-les pour les tests unitaires sur
+des images jouets (par exemple 16×16), pas pour l'evaluation reelle.
+
+
+################################################################################
+PARTIE 4 — ORDRE DE CONSTRUCTION, PHASE PAR PHASE
+################################################################################
+
+Principe : meme logique que pour les ellipses. On descend le flux de donnees
+pour l'ecriture, on remonte les contraintes pour la conception. A chaque phase,
+un critere d'arret VERIFIABLE — on ne passe pas a la suivante sans lui.
+
+================================================================================
+PHASE 0 — Figer quatre decisions (30 minutes, avant toute ligne de code)
+================================================================================
+
+Ecrivez-les dans un CLAUDE.md du nouveau projet, elles conditionnent tout :
+
+    1. RESOLUTION       64×64 comme l'article. (Une variante 32×32 pour
+                        iterer vite est un bon investissement — voir phase 2.)
+    2. CANAUX           niveaux de gris, comme l'article. La couleur
+                        triplerait n et exigerait de modeliser aussi les
+                        correlations inter-canaux : hors sujet pour un premier jet.
+    3. NIVEAU DE BRUIT  fixe d'abord, par exemple sigma = 25/255 (le standard
+                        DnCNN). Le bruit aveugle (sigma variable) vient ensuite.
+    4. VOISINAGE        f = 7 comme l'article -> m = 24, 25 canaux de sortie.
+
+================================================================================
+PHASE 1 — Les donnees
+================================================================================
+
+A ECRIRE : `data.py`
+
+    * recuperation de CelebA « aligned & cropped » (img_align_celeba) ;
+    * recadrage central puis redimensionnement en 64×64 ;
+    * conversion en niveaux de gris ;
+    * normalisation dans [-1, 1] (comme l'article) ;
+    * split officiel 182 637 / 19 962 ;
+    * MISE EN CACHE dans un unique fichier .npy ou .pt.
+      182 637 × 64 × 64 × 1 octet (uint8) = 748 Mo. Tout tient en RAM en uint8,
+      et on convertit en float par batch. Ne relisez pas 182 000 JPEG a chaque
+      epoch : ce serait le goulot d'etranglement de tout le projet.
+
+    * une classe `CelebADataset` qui renvoie, pour chaque exemple :
+          x     : l'image propre
+          y     : x + bruit gaussien sigma (tire A LA VOLEE, pas stocke)
+
+      Tirer le bruit a chaque acces est ici GRATUIT (un randn) et joue le role
+      d'augmentation de donnees — c'est le `resample_noise=True` que vous ne
+      pouviez pas vous offrir dans le projet ellipses.
+
+CRITERE D'ARRET : une figure montrant 8 paires (x, y) correctement cadrees,
+en gris, dans la bonne plage de valeurs. Et un chargement complet en moins de
+5 secondes depuis le cache.
+
+================================================================================
+PHASE 2 — Le DnCNN seul (sans aucune incertitude)
+================================================================================
+
+A ECRIRE : `dncnn.py`, plus un `train_dncnn.py`
+
+Peut-etre deja fait de votre cote (votre `train.bash` active un environnement
+nomme `dncnn`). Si oui, cette phase se resume a l'adapter a CelebA 64×64 et a
+verifier le point ci-dessous.
+
+    * architecture DnCNN standard : 17 couches Conv-BN-ReLU, 64 canaux,
+      apprentissage RESIDUEL (le reseau predit le bruit) ;
+    * loss MSE ;
+    * sortie : mu = y - reseau(y).
+
+CRITERE D'ARRET, et il est important :
+    PSNR raisonnable sur le test (~30 dB a sigma=25 sur des visages), ET
+    surtout : REGARDEZ LE RESIDU r = x - mu. Affichez-le.
+
+    Si `r` ressemble a du bruit blanc, arretez tout : il n'y a rien a modeliser
+    et le projet n'a pas de sens. Ce doit etre le contraire — `r` doit contenir
+    des structures visibles : contours, cheveux, texture. C'est la VERIFICATION
+    D'HYPOTHESE de tout le projet, et elle coute une figure.
+
+    Faites aussi l'autocorrelation spatiale de `r` : si elle est piquee en 0 et
+    plate ailleurs, meme conclusion. Elle doit s'etaler sur plusieurs pixels.
+
+================================================================================
+PHASE 3 — Adapter loss.py (la phase la plus courte)
+================================================================================
+
+A ECRIRE : quasiment rien. Reprendre `loss.py` tel quel.
+
+    causal_offsets(f=7)             -> 24 offsets au lieu de 12
+    build_neighbor_indices(64, 7)   -> [4096, 24]
+    apply_LT                        -> INCHANGE
+    structured_gaussian_nll         -> INCHANGE
+
+C'est le moment ou le travail deja fait paie. Vos deux fonctions centrales sont
+independantes de la taille d'image et du voisinage : tout passe par les
+constantes.
+
+CRITERE D'ARRET : relancer le `__main__` de loss.py avec S=64, f=7. Les quatre
+tests doivent passer.
+
+    ATTENTION : le test 1 (creux vs dense) construit un L dense 4096×4096 =
+    67 Mo par exemple. Faites-le avec B=1, ou mieux : gardez le test unitaire en
+    16×16 (il valide l'algorithme, qui ne depend pas de la taille) et ajoutez
+    juste un test de FORME en 64×64.
+
+AJOUTEZ AUSSI, tant que vous y etes, le clamp manquant :
+    log_diag = torch.clamp(log_diag, min=-10.0, max=10.0)
+A 4096 pixels et sur donnees reelles, le risque d'explosion est bien plus grand
+qu'en 16×16 sur donnees synthetiques.
+
+================================================================================
+PHASE 4 — Le reseau de covariance
+================================================================================
+
+A ECRIRE : `cov_model.py`
+
+    entree  : mu [B, 1, 64, 64]        (option (a) de la section 2.5)
+    sortie  : log_diag [B, 4096]  et  offdiag [B, 4096, 24]
+
+    Architecture : votre `SparseCholeskyNet` agrandi. En 64×64 il faut plus de
+    profondeur qu'en 16×16 pour que le champ receptif couvre une portion utile
+    du visage :
+
+        U-Net a 3 niveaux :  64 -> 32 -> 16 -> 32 -> 64
+        canaux : 32, 64, 128, avec connexions de saut
+        tete   : conv 1×1 -> 25 canaux
+
+    Gardez l'initialisation a zero + biais sur le canal 0. Calibrez
+    `init_log_diag` sur l'ecart-type reel du residu de DnCNN mesure en phase 2 :
+        init_log_diag = -log(std(r))
+    C'est un reglage gratuit qui evite des premieres epochs chaotiques.
+
+CRITERE D'ARRET : forward + backward, formes correctes, gradients non nuls,
+et le compte de parametres affiche. Puis un SURAPPRENTISSAGE VOLONTAIRE sur 8
+images : la NLL doit descendre tres bas. Si elle ne descend pas sur 8 images, le
+probleme est dans le code, pas dans les donnees.
+
+================================================================================
+PHASE 5 — L'entrainement en deux temps
+================================================================================
+
+A ECRIRE : `train_cov.py`
+
+    1. charger le DnCNN entraine, le mettre en `eval()` et GELER ses poids :
+           for p in dncnn.parameters(): p.requires_grad_(False)
+    2. pour chaque batch :
+           y  = x + sigma * randn
+           mu = dncnn(y)                    <- sous torch.no_grad()
+           r  = x - mu
+           log_diag, offdiag = cov_net(mu)
+           loss = structured_gaussian_nll(log_diag, offdiag, r, ...)
+    3. Adam, lr 1e-3, 50 epochs, batch 64 (les valeurs de l'article).
+
+    Le `torch.no_grad()` autour de DnCNN n'est pas cosmetique : il divise par
+    deux la memoire et evite tout gradient parasite vers le debruiteur.
+
+CRITERE D'ARRET : la NLL de validation descend et se stabilise, sans NaN.
+Sauvegardez `best_model.pt` sur la NLL de validation, et ECRIVEZ history.json a
+chaque epoch (ce qui manque dans le projet ellipses).
+
+  Sur le cluster : votre partition `short` est limitee a 1h55. 182 637 images
+  en batch 64 = 2 854 iterations par epoch. Prevoyez une REPRISE SUR
+  CHECKPOINT des le depart (sauvegarde de l'optimiseur et du numero d'epoch),
+  sinon vous perdrez des runs.
+
+================================================================================
+PHASE 6 — Evaluation SANS verite terrain
+================================================================================
+
+A ECRIRE : `eval_cov.py`
+
+C'est la difference conceptuelle majeure avec le projet ellipses : `Sigma_true`
+n'existe pas. Frobenius et KL disparaissent. Il reste quatre choses, et elles
+suffisent.
+
+    (1) NLL SUR LE JEU DE TEST
+        La metrique centrale. Deja disponible.
+
+    (2) LA REFERENCE DIAGONALE  <- L'ARGUMENT DECISIF
+        Reentrainer le meme reseau en forcant `offdiag = 0`. On obtient un
+        modele heteroscedastique classique. L'ecart de NLL chiffre EXACTEMENT
+        ce que la structure apporte.
+        Sans cette comparaison, vos resultats ne demontrent rien. C'est la
+        Table 3 de l'article, en version simplifiee et honnete.
+
+    (3) TEST DE CALIBRATION sur le residu blanchi
+        w = L^T r doit suivre N(0, I) si le modele est correct.
+        Verifiez : moyenne ~ 0, variance ~ 1 par pixel, autocorrelation
+        spatiale nulle.
+        C'est le SEUL diagnostic quantitatif qui ne demande pas de verite
+        terrain — donc le seul valable sur donnees reelles. Il donne en prime
+        une CARTE de sur/sous-confiance, tres parlante en figure.
+
+    (4) FIGURES QUALITATIVES (Fig. 7 et 19 de l'article)
+        colonne 1 : x propre
+        colonne 2 : y bruitee
+        colonne 3 : mu = DnCNN(y)          <- lisse, detail perdu
+        colonne 4 : mu + eps, eps ~ diagonal   <- neige
+        colonne 5 : mu + eps, eps ~ structure  <- detail plausible
+
+        C'est la figure qui emporte la conviction, bien plus qu'un tableau.
+
+================================================================================
+PHASE 7 — L'application debruitage (§5.3)
+================================================================================
+
+A ECRIRE : `denoise.py`
+
+L'idee : `s = y - mu` contient le bruit ET le detail perdu. Sigma decrit la
+forme des residus plausibles. On projette pour separer les deux.
+
+    METHODE DE L'ARTICLE : garder les 1000 plus grands vecteurs propres de
+    Sigma et projeter dessus.
+
+    PROBLEME : une decomposition spectrale d'une matrice 4096×4096, par image,
+    coute O(n³). Sur 2000 images de test, c'est deraisonnable.
+
+    ALTERNATIVE QUE JE VOUS RECOMMANDE — le filtre de Wiener :
+
+        s_filtre = Sigma (Sigma + tau I)^{-1} s
+
+    Meme intention (attenuer ce qui n'est pas dans les directions dominantes de
+    Sigma, garder ce qui l'est), mais SANS decomposition spectrale : cela se
+    ramene a resoudre un systeme lineaire avec la precision creuse `Lambda`, par
+    gradient conjugue. Chaque produit `Lambda v` se calcule avec `apply_LT` et
+    son transpose, donc en O(n·m) — vous avez deja le code.
+
+    `tau` joue le role du nombre de vecteurs propres gardes : un seul scalaire
+    a regler sur un jeu de validation, au lieu d'un « 1000 » arbitraire.
+
+    Commencez par implementer la version article sur QUELQUES images (pour
+    reproduire la figure 18), puis passez au Wiener pour l'evaluation a grande
+    echelle.
+
+CRITERE D'ARRET : la MSE contre `x` propre, sur 2000 images de test, comparee
+a celle de DnCNN seul. L'article obtient 2.99e-3 contre 5.13e-3 pour un DAE.
+Votre reference naturelle est DnCNN seul, ce qui est un adversaire plus
+coriace qu'un DAE — soyez pret a ce que le gain soit plus modeste, et dites-le.
+
+
+################################################################################
+PARTIE 5 — ARBORESCENCE PROPOSEE
+################################################################################
+
+Meme convention que vos deux projets existants, pour rester comparable :
+
+    data.py           telechargement, pretraitement, cache, CelebADataset
+    dncnn.py          le debruiteur
+    train_dncnn.py    entrainement du debruiteur (phase 2)
+    loss.py           REPRIS TEL QUEL du projet ellipses (f=7)
+    cov_model.py      le reseau de covariance
+    train_cov.py      entrainement en deux temps, DnCNN gele
+    eval_cov.py       NLL, reference diagonale, calibration, figures
+    denoise.py        l'application §5.3
+    main.py           orchestration
+    results/          sorties horodatees
+
+
+################################################################################
+PARTIE 6 — LES PIEGES QUE VOUS ALLEZ RENCONTRER
+################################################################################
+
+6.1 Le residu de DnCNN est peut-etre trop blanc
+    C'est LE risque existentiel du projet, a lever des la phase 2. Un DnCNN
+    tres performant laisse un residu proche du bruit blanc, et il n'y a alors
+    rien a modeliser. Parades : augmenter sigma, reduire la capacite du DnCNN,
+    ou l'arreter plus tot. Il FAUT qu'il reste de la structure dans l'erreur.
+
+6.2 Toute matrice dense est interdite
+    Voir la partie 3. Ecrivez l'evaluation sans Sigma des le premier jour ;
+    la rattraper apres coup est bien plus penible.
+
+6.3 La NLL n'est plus comparable a celle des ellipses
+    n passe de 256 a 4096, donc la constante seule passe de 235 a 3 764.
+    Ne comparez jamais les deux projets sur cette valeur.
+
+6.4 L'effet de bord devient negligeable
+    En 16×16 avec f=5, 34 % des pixels avaient un voisinage tronque. En 64×64
+    avec f=7, c'est environ 17 %. Le probleme s'attenue tout seul.
+
+6.5 Le bruit doit etre retire A LA VOLEE
+    Si vous figez `y` une fois pour toutes, le reseau peut memoriser le residu
+    de chaque image. Avec un tirage a chaque acces, ce mode de defaillance
+    disparait — et ici c'est gratuit, contrairement au projet ellipses.
+
+6.6 Ne donnez jamais `x` propre au reseau de covariance
+    Rappel de la section 2.5. C'est la seule erreur qui produirait des
+    resultats spectaculaires et entierement faux.
+
+================================================================================
+FIN
+================================================================================

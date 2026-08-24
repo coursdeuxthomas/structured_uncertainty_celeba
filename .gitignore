@@ -1,0 +1,47 @@
+# ---- Données ----
+# Le dataset se re-télécharge avec download.py : jamais sur GitHub.
+img_align_celeba/
+celeba_raw/
+*.zip
+*.csv
+*.npy
+*.npz
+cache/
+data_cache/
+
+# ---- Article ----
+article.pdf
+
+# ---- Sorties d'entraînement ----
+results/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.log
+slurm-*.out
+
+# ---- Secrets ----
+kaggle.json
+.env
+*.key
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+venv/
+.venv/
+env/
+
+# ---- Éditeurs / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Fichiers temporaires de git non supprimables depuis la session (à vider à la main)
+_to_delete/
