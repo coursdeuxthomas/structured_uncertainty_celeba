@@ -397,7 +397,14 @@ Toujours exporter les chemins d'abord :
   se fait en copie a l'ecriture, donc la memoire n'est pas reellement dupliquee,
   mais prevoyez large dans le sbatch : --mem=16G au minimum.
 
-10.4 Ne pas conclure sur un modele sous-entraine
+10.4 Lancer sur le noeud de connexion
+  train_dncnn.py refuse desormais de demarrer si SLURM_JOB_ID est vide, et
+  rappelle la commande srun a utiliser. Sans ce garde-fou, l'entrainement
+  tournerait sur CPU — des dizaines de fois plus lentement — tout en saturant
+  une machine partagee par tout le laboratoire. L'option --local permet de
+  passer outre volontairement pour un petit test.
+
+10.5 Ne pas conclure sur un modele sous-entraine
   verifier_residu.py sur un checkpoint de 1 epoch ne prouve rien. Attendre au
   moins le run court de 3 epochs, et verifier d'abord que le PSNR depasse
   nettement les 20,17 dB de reference.

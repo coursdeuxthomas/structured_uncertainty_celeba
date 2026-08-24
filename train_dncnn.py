@@ -83,6 +83,32 @@ def sauvegarde_atomique(objet, chemin):
     os.replace(tmp, chemin)
 
 
+def verifier_noeud_de_calcul(forcer):
+    """
+    Refuse de demarrer hors d'un job SLURM.
+
+    Les GPU ne sont visibles que dans un job. Lancer un entrainement sur le
+    noeud de connexion le sature pour tous les utilisateurs du cluster, et
+    tourne de toute facon sur CPU, donc des dizaines de fois plus lentement.
+    Le garde-fou coute deux lignes et evite une erreur qu'on ne remarque pas
+    tout de suite.
+    """
+    if forcer or os.environ.get("SLURM_JOB_ID"):
+        return
+    print("ERREUR : aucun job SLURM detecte (SLURM_JOB_ID est vide).")
+    print("  Tu es sur le noeud de connexion, ou il n'y a pas de GPU.")
+    print()
+    print("  Session interactive, pour un run court :")
+    print("    srun --partition=short --gres=gpu:1 --cpus-per-task=4 \\")
+    print("         --mem=16G --time=01:55:00 --pty bash")
+    print()
+    print("  Ou en tache de fond, pour un run long :")
+    print("    sbatch train_dncnn.bash")
+    print()
+    print("  Pour passer outre volontairement (petit test sur CPU) : --local")
+    raise SystemExit(1)
+
+
 def charger_checkpoint(chemin, appareil):
     """
     Charge un checkpoint ecrit par ce script.
@@ -146,7 +172,11 @@ def main():
                    help="précision mixte : environ deux fois plus rapide.")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--graine", type=int, default=0)
+    p.add_argument("--local", action="store_true",
+                   help="autorise l'execution hors d'un job SLURM.")
     args = p.parse_args()
+
+    verifier_noeud_de_calcul(args.local)
 
     torch.manual_seed(args.graine)
     np.random.seed(args.graine)
