@@ -23,8 +23,13 @@ from torch.utils.data import Dataset
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-RAW_DIR = "img_align_celeba"          # dossier des JPEG bruts
-CACHE_PATH = "celeba_64_gray.npy"     # cache uint8 [N, 64, 64]
+# Chemins surchargeables par variable d'environnement. Sur un cluster, les
+# JPEG (1,4 Go) et le cache (830 Mo) doivent aller sur le scratch et non dans
+# le home, dont le quota est petit :
+#     export CELEBA_DIR=$SCRATCH/celeba/img_align_celeba
+#     export CELEBA_CACHE=$SCRATCH/celeba/celeba_64_gray.npy
+RAW_DIR = os.environ.get("CELEBA_DIR", "img_align_celeba")      # JPEG bruts
+CACHE_PATH = os.environ.get("CELEBA_CACHE", "celeba_64_gray.npy")  # uint8 [N,64,64]
 
 IMAGE_SIZE = 64      # résolution finale (article)
 CROP = 148           # recadrage centré avant redimensionnement

@@ -45,3 +45,4 @@ desktop.ini
 
 # Fichiers temporaires de git non supprimables depuis la session (à vider à la main)
 _to_delete/
+logs/

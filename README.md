@@ -80,6 +80,9 @@ python download.py   # renseigner ses identifiants Kaggle au préalable
 | `eval_cov.py` | NLL, référence diagonale, calibration, figures |
 | `denoise.py` | l'application §5.3 (projection du résidu) |
 | `main.py` | orchestration |
+| `setup_cluster.sh` | installation de l'environnement sur le cluster |
+| `get_data.sh` | téléchargement Kaggle, vérification, construction du cache |
+| `train.bash` | job SLURM (partition `short`, 1 GPU, 1h55, reprise) |
 
 ## Entraînement en deux temps
 
@@ -116,6 +119,65 @@ python -m venv venv
 source venv/bin/activate      # Windows : venv\Scripts\activate
 pip install numpy torch matplotlib pillow kaggle
 ```
+
+## Sur le cluster
+
+```bash
+# 1. Cloner (dépôt public : aucune authentification nécessaire)
+git clone https://github.com/coursdeuxthomas/structured_uncertainty_celeba.git
+cd structured_uncertainty_celeba
+
+# 2. Environnement Python
+bash setup_cluster.sh          # crée ./venv et installe torch + dépendances
+source venv/bin/activate
+
+# 3. Données : sur le scratch, JAMAIS dans le home
+export CELEBA_DIR=$SCRATCH/celeba/img_align_celeba
+export CELEBA_CACHE=$SCRATCH/celeba/celeba_64_gray.npy
+bash get_data.sh               # Kaggle + vérification + cache 64x64 gris
+
+# 4. Lancer un entraînement
+sbatch train.bash dncnn
+squeue -u $USER
+tail -f logs/celeba-<jobid>.out
+```
+
+**Trois points d'attention.**
+
+*Les modules.* `setup_cluster.sh` et `train.bash` contiennent des lignes
+`module load` commentées : remplace-les par les noms réels de ton cluster
+(`module avail python cuda`) avant de lancer quoi que ce soit.
+
+*Le scratch.* Les JPEG pèsent 1,4 Go et le cache 830 Mo. Le quota du home est
+en général trop petit — d'où `CELEBA_DIR` et `CELEBA_CACHE`. La variable
+`$SCRATCH` n'existe pas partout : elle peut s'appeler `$WORK`, `$SCRATCHDIR`,
+ou correspondre à un chemin en dur.
+
+*La limite de 1h55.* Un entraînement de 50 epochs ne tient pas dans un job de
+la partition `short`. Les scripts d'entraînement **doivent** sauvegarder
+l'optimiseur et le numéro d'epoch dès la première version, et accepter
+`--resume`. `train.bash` sait alors se resoumettre tout seul :
+
+```bash
+sbatch --export=ALL,AUTO_RELANCE=1 train.bash dncnn
+```
+
+Il s'arrête quand le script python crée `checkpoints/dncnn_FINI`, ou au bout de
+20 relances.
+
+**Aller-retour code.** Développe en local, pousse, récupère sur le cluster :
+
+```bash
+# poste local
+git add -A && git commit -m "..." && git push
+
+# cluster
+git pull
+```
+
+Ne modifie pas le code directement sur le cluster : tu perdrais l'historique et
+les deux copies divergeraient. Ce qui reste côté cluster, ce sont les données,
+les checkpoints et les logs — tous ignorés par git.
 
 ## État d'avancement
 
