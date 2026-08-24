@@ -80,9 +80,6 @@ python download.py   # renseigner ses identifiants Kaggle au préalable
 | `eval_cov.py` | NLL, référence diagonale, calibration, figures |
 | `denoise.py` | l'application §5.3 (projection du résidu) |
 | `main.py` | orchestration |
-| `setup_cluster.sh` | installation de l'environnement sur le cluster |
-| `get_data.sh` | téléchargement Kaggle, vérification, construction du cache |
-| `train.bash` | job SLURM (partition `short`, 1 GPU, 1h55, reprise) |
 
 ## Entraînement en deux temps
 
@@ -123,61 +120,51 @@ pip install numpy torch matplotlib pillow kaggle
 ## Sur le cluster
 
 ```bash
-# 1. Cloner (dépôt public : aucune authentification nécessaire)
 git clone https://github.com/coursdeuxthomas/structured_uncertainty_celeba.git
 cd structured_uncertainty_celeba
+```
 
-# 2. Environnement Python
-bash setup_cluster.sh          # crée ./venv et installe torch + dépendances
-source venv/bin/activate
+Le dépôt est public : pas d'authentification pour cloner. Il ne contient que le
+code — les images, le cache `.npy`, les checkpoints et les logs restent sur le
+cluster et sont ignorés par git.
 
-# 3. Données : sur le scratch, JAMAIS dans le home
+**Les données.** `data.py` lit `img_align_celeba/` et écrit
+`celeba_64_gray.npy` dans le dossier courant. Les deux chemins se surchargent
+par variable d'environnement, ce qui évite de remplir le home :
+
+```bash
 export CELEBA_DIR=$SCRATCH/celeba/img_align_celeba
 export CELEBA_CACHE=$SCRATCH/celeba/celeba_64_gray.npy
-bash get_data.sh               # Kaggle + vérification + cache 64x64 gris
-
-# 4. Lancer un entraînement
-sbatch train.bash dncnn
-squeue -u $USER
-tail -f logs/celeba-<jobid>.out
+python data.py --build         # une seule fois, 10 à 20 min
 ```
 
-**Trois points d'attention.**
+Le dataset doit compter **202 599 images**. `data.py` découpe train/test par
+indice : avec un téléchargement incomplet, le split serait faux sans aucun
+message d'erreur.
 
-*Les modules.* `setup_cluster.sh` et `train.bash` contiennent des lignes
-`module load` commentées : remplace-les par les noms réels de ton cluster
-(`module avail python cuda`) avant de lancer quoi que ce soit.
-
-*Le scratch.* Les JPEG pèsent 1,4 Go et le cache 830 Mo. Le quota du home est
-en général trop petit — d'où `CELEBA_DIR` et `CELEBA_CACHE`. La variable
-`$SCRATCH` n'existe pas partout : elle peut s'appeler `$WORK`, `$SCRATCHDIR`,
-ou correspondre à un chemin en dur.
-
-*La limite de 1h55.* Un entraînement de 50 epochs ne tient pas dans un job de
-la partition `short`. Les scripts d'entraînement **doivent** sauvegarder
-l'optimiseur et le numéro d'epoch dès la première version, et accepter
-`--resume`. `train.bash` sait alors se resoumettre tout seul :
+**Pousser depuis le cluster.** Une fois par machine, créer une clé SSH et la
+déclarer sur GitHub (Settings > SSH and GPG keys) :
 
 ```bash
-sbatch --export=ALL,AUTO_RELANCE=1 train.bash dncnn
+git config --global user.name  "Thomas"
+git config --global user.email "ts.bouru@gmail.com"
+
+ssh-keygen -t ed25519 -C "ts.bouru@gmail.com"   # Entrée trois fois
+cat ~/.ssh/id_ed25519.pub                       # à coller sur GitHub
+
+ssh -T git@github.com                           # doit répondre "Hi coursdeuxthomas!"
+git remote set-url origin git@github.com:coursdeuxthomas/structured_uncertainty_celeba.git
 ```
 
-Il s'arrête quand le script python crée `checkpoints/dncnn_FINI`, ou au bout de
-20 relances.
-
-**Aller-retour code.** Développe en local, pousse, récupère sur le cluster :
+Ensuite, dans les deux sens :
 
 ```bash
-# poste local
-git add -A && git commit -m "..." && git push
-
-# cluster
-git pull
+git add -A && git commit -m "..." && git push    # cluster  -> GitHub
+git pull                                         # GitHub   -> poste local
 ```
 
-Ne modifie pas le code directement sur le cluster : tu perdrais l'historique et
-les deux copies divergeraient. Ce qui reste côté cluster, ce sont les données,
-les checkpoints et les logs — tous ignorés par git.
+Toujours faire `git pull` avant de reprendre le travail sur l'autre machine :
+c'est le mélange de deux copies modifiées sans `pull` qui produit les conflits.
 
 ## État d'avancement
 
