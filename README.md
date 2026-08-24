@@ -88,6 +88,7 @@ Diagnostics et outillage :
 | `verifier_alignement.py` | preuve empirique de l'alignement des visages |
 | `verifier_residu.py` | **la vérification critique** : structure du résidu |
 | `build_data.bash` | job SLURM de construction du cache |
+| `train_dncnn.bash` | job SLURM d'entraînement du débruiteur |
 | `PROCEDURE.md` | récupérer les images et construire le cache |
 | `explication_data.txt` | commentaire détaillé de `data.py` |
 | `explication_dncnn.txt` | commentaire détaillé de l'étape 1 |
