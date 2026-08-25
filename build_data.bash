@@ -36,7 +36,7 @@ echo "(202599 attendu)"
 
 # --build construit le cache PUIS enchaîne sur les vérifications et écrit
 # results/data_preview.png : un seul appel suffit.
-python data.py --build     # ~10 à 20 min, une seule fois
+python -u data.py --build  # ~10 à 20 min, une seule fois (-u : log en direct)
 
 echo "Job finished:"
 date

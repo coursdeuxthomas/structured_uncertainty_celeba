@@ -34,7 +34,10 @@ which python
 python -c "import torch; print('torch:', torch.__version__, '| cuda:', torch.cuda.is_available())"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-python train_dncnn.py --epochs "$EPOCHS" --amp --resume
+# -u : sortie non tamponnee. Sans lui, quand stdout est un FICHIER et non un
+# terminal, Python accumule les print dans un tampon de 8 Ko et le log reste
+# vide plusieurs minutes. tail -f ne montrerait rien.
+python -u train_dncnn.py --epochs "$EPOCHS" --amp --resume
 
 echo "Job finished:"
 date
