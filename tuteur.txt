@@ -1,7 +1,7 @@
 ================================================================================
 NOTES POUR LA PRESENTATION AU TUTEUR
 Structured Uncertainty Prediction Networks applique au debruitage CelebA
-Derniere mise a jour : 24 aout 2026
+Derniere mise a jour : 26 aout 2026
 ================================================================================
 
 Document vivant : a completer a chaque etape franchie. Les sections 8, 11 et 12
@@ -157,15 +157,19 @@ log_diag de taille [4096] et un tenseur offdiag de taille [4096, 24].
 L'hypothese implicite : les dependances a longue portee sont negligeables
 devant les dependances locales. C'est raisonnable pour de la texture.
 
-ET CE N'EST PAS QU'UNE HYPOTHESE : ON L'A MESUREE. Le 24 aout, sur le residu
-d'un DnCNN entraine 3 epochs, l'autocorrelation spatiale passe sous 0,1 a un
-rayon de 3 PIXELS. Or un patch 7x7 couvre exactement +/- 3 pixels autour de
-chaque pixel : (7 - 1)/2 = 3.
+ET CE N'EST PAS QU'UNE HYPOTHESE : ON L'A MESUREE DEUX FOIS. Sur le residu
+d'un DnCNN entraine 3 epochs, puis sur celui du modele final a 50 epochs,
+l'autocorrelation spatiale passe sous 0,1 au meme rayon de 3 PIXELS. Or un
+patch 7x7 couvre exactement +/- 3 pixels autour de chaque pixel :
+(7 - 1)/2 = 3.
 
 Autrement dit, la portee mesuree des correlations coincide avec la demi-largeur
 du motif de l'article. f = 7 n'est donc pas un chiffre repris par confiance,
 c'est la valeur que la mesure aurait suggeree. C'est le meilleur argument du
 projet a ce stade — a placer en premier si le tuteur demande d'ou vient f.
+
+Et la portee ne bouge pas entre 3 et 50 epochs : la structure du residu n'est
+donc pas un artefact d'un debruiteur inacheve. Voir section 12.
 
 
 ================================================================================
@@ -209,14 +213,38 @@ LE DEBRUITEUR (DnCNN)
      comme controle de coherence des echelles)
   PSNR attendu apres entrainement               = 29 a 32 dB (indicatif)
 
-LE RESIDU, MESURE LE 24 AOUT (DnCNN a 3 epochs seulement)
+LE RESIDU, MESURE SUR LE MODELE FINAL (dncnn_best.pt, epoch 45 sur 50)
   Ecart-type du bruit ajoute                    = 0,1961
-  Ecart-type du residu r = x - mu               = 0,0698
-    -> soit un PSNR de 29,1 dB, contre 20,17 pour l'image bruitee : +9 dB
-  Autocorrelation de r a 1 pixel, horizontale   = 0,537
-  Autocorrelation de r a 1 pixel, verticale     = 0,576
+  Ecart-type du residu r = x - mu               = 0,0640
+    -> soit un PSNR de 29,9 dB, contre 20,17 pour l'image bruitee : +9,7 dB
+  Autocorrelation de r a 1 pixel, horizontale   = 0,547
+  Autocorrelation de r a 1 pixel, verticale     = 0,598
   Temoin bruit blanc, meme calcul               = -0,001
   Portee (rayon ou l'autocorrelation < 0,1)     = 3 pixels
+
+LES MEMES MESURES A 3 EPOCHS, POUR COMPARAISON
+  Ecart-type du residu                          = 0,0698  (PSNR 29,1 dB)
+  Autocorrelation a 1 pixel                     = 0,537 / 0,576
+  Portee                                        = 3 pixels
+    -> 47 epochs de plus ne gagnent que 0,8 dB : le DnCNN plafonne tot, c'est
+       son comportement connu. Et surtout l'autocorrelation ne baisse pas,
+       elle MONTE legerement. C'est le resultat le plus utile du run, il est
+       commente en section 12.
+
+LE RESEAU DE COVARIANCE (SparseCholeskyNet)
+  Architecture                                  = U-Net 3 niveaux, 32/64/128
+  Tete                                          = conv 1x1 -> 25 canaux
+  Parametres                                    = 518 681  (0,52 M)
+    -> du meme ordre que le DnCNN (0,56 M) : les deux reseaux doivent
+       reconnaitre les memes structures, il serait suspect que l'un soit
+       beaucoup plus gros que l'autre.
+  Champ receptif                                = ~50 x 50 pixels
+    (32 x 32 des le fond du U, contre 35 x 35 pour le DnCNN)
+  init_log_diag = -log(0,0640)                  = 2,749
+    -> a l'initialisation le reseau predit une gaussienne isotrope d'ecart-type
+       exactement egal au residu du modele final. Recalibre le 26 aout.
+  Sortie pour un batch de 64                    = 26 Mo
+    (contre 4,3 Go si on formait les matrices denses)
 
 L'ENTRAINEMENT (valeurs de l'article)
   lr                                            = 1e-3
@@ -481,11 +509,23 @@ FAIT
       du chapeau. Il y a bien une structure a apprendre.
       Figure : results/residu.png
 
+  [x] DnCNN entraine 50 epochs sur le cluster. Meilleur modele de validation
+      a l'epoch 45 : PSNR 29,9 dB, residu d'ecart-type 0,0640.
+  [x] verifier_residu.py relance sur le modele final. Verdict inchange, et la
+      reserve de la section 12 est LEVEE (voir la-bas, c'est un resultat).
+  [x] STD_RESIDU recalibre dans cov_model.py : 0,0698 -> 0,0640.
+  [x] loss.py : repris du projet ellipses, f = 7, clamp de log_diag ajoute.
+      Les trois blocs de tests passent : algorithme en 16x16 valide contre la
+      matrice dense (erreur 4,8e-07), formes en 64x64, saturation du clamp.
+  [x] cov_model.py : U-Net 3 niveaux, tete a 25 canaux, 518 681 parametres.
+  [x] surapprentissage.py : le test qui verifie loss.py et cov_model.py
+      ENSEMBLE, sur 8 images a bruit fige. Chaine validee sur un faux cache
+      le 26 aout ; reste a la lancer sur les vraies donnees.
+
 A FAIRE, DANS CET ORDRE
-  [ ] Run complet du DnCNN : 50 epochs, trois jobs avec --resume
-  [ ] loss.py : repris du projet ellipses avec f = 7, tests relances,
-      clamp log_diag.clamp(-10, 10) a ajouter
-  [ ] cov_model.py : U-Net 3 niveaux, tete a 25 canaux
+  [ ] surapprentissage.py sur les vraies donnees. La NLL doit s'effondrer et
+      le modele structure doit battre le diagonal. Deux minutes, contre cinq
+      heures pour un vrai entrainement : a faire AVANT train_cov.py.
   [ ] train_cov.py : entrainement en deux temps, DnCNN gele
   [ ] eval_cov.py : NLL, reference diagonale, calibration, figures
   [ ] denoise.py : projection du residu, MSE finale
@@ -671,14 +711,27 @@ LES VARIABLES D'ENVIRONNEMENT
 12. CE QUI RESTE INCERTAIN
 ================================================================================
 
-LA VERIFICATION CRITIQUE EST PASSEE (24 aout). Le risque principal du
-  projet est leve : le residu est structure, il y a quelque chose a apprendre.
+LA VERIFICATION CRITIQUE EST PASSEE (24 aout, CONFIRMEE LE 26 SUR LE MODELE
+  FINAL). Le risque principal du projet est leve : le residu est structure, il
+  y a quelque chose a apprendre.
 
-  Reserve honnete a mentionner : la mesure a ete faite sur un DnCNN entraine
-  seulement 3 epochs. Un debruiteur mieux entraine retire moins de detail, donc
-  la composante structuree de r sera PLUS FAIBLE apres 50 epochs. Il faudra
-  refaire la mesure sur le modele final. La conclusion qualitative ne devrait
-  pas changer, mais les chiffres si.
+  LA RESERVE QUI FIGURAIT ICI EST LEVEE, ET DANS LE BON SENS. On craignait
+  qu'un debruiteur mieux entraine retire moins de detail et laisse un residu
+  moins structure. La mesure sur le modele final dit le contraire :
+
+    ecart-type de r        0,0698  ->  0,0640   (il baisse, attendu)
+    autocorrelation horiz.  0,537  ->   0,547   (elle MONTE)
+    autocorrelation vert.   0,576  ->   0,598   (elle MONTE)
+    portee                3 pixels -> 3 pixels  (inchangee)
+
+  Lecture : le DnCNN retire surtout la composante BLANCHE du residu, celle
+  qu'il sait traiter. Ce qui reste est donc proportionnellement PLUS correle.
+  Autrement dit, mieux le debruiteur travaille, plus le residu ressemble a ce
+  que ce projet veut modeliser.
+
+  C'est la reponse a l'objection la plus naturelle que le tuteur puisse faire :
+  << votre residu n'est structure que parce que votre debruiteur n'etait pas
+  fini >>. Non : il l'est davantage une fois le debruiteur fini.
 
 LA STABILITE NUMERIQUE DE LA NLL.
   Le clamp log_diag.clamp(-10, 10) manquait dans le projet ellipses. Sans lui,
@@ -718,6 +771,9 @@ DOCUMENTS DU DEPOT
   dncnn.py                   l'architecture du debruiteur
   train_dncnn.py             entrainement, reprise sur checkpoint
   verifier_residu.py         la verification critique
+  loss.py                    la NLL gaussienne structuree creuse
+  cov_model.py               le reseau de covariance
+  surapprentissage.py        test conjoint de loss.py et cov_model.py
   explication_dncnn.txt      commentaire des trois fichiers ci-dessus
 
 DOCUMENTS DE CE DOSSIER

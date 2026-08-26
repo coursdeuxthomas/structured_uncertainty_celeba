@@ -42,13 +42,14 @@ N_SORTIES = 1 + N_VOISINS                       # 25 canaux en tête de réseau
 # Largeur des trois niveaux du U-Net.
 CANAUX = (32, 64, 128)
 
-# Écart-type du résidu du DnCNN, mesuré le 24 août sur un run court de
-# 3 epochs (voir tuteur.txt §4). Sert uniquement à l'initialisation.
+# Écart-type du résidu du DnCNN, mesuré le 26 août sur le MODÈLE FINAL
+# (dncnn_best.pt, meilleure epoch de validation : 45 sur 50).
+# Sert uniquement à l'initialisation. Voir tuteur.txt §4.
 #
-# À RECALIBRER après le run complet de 50 epochs : le résidu sera plus petit,
-# donc init_log_diag plus grand. Ce n'est pas critique — le réseau rattrape en
-# quelques centaines d'itérations — mais c'est gratuit.
-STD_RESIDU = 0.0698
+# Valeur précédente : 0,0698, mesurée sur un run court de 3 epochs. Les 47
+# epochs suivantes ne gagnent que 8 % sur le résidu — le DnCNN plafonne tôt,
+# c'est son comportement connu. À ne recalibrer que si le débruiteur change.
+STD_RESIDU = 0.0640
 INIT_LOG_DIAG = -math.log(STD_RESIDU)           # ~ 2,66
 
 
