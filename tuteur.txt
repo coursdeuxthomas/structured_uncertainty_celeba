@@ -643,6 +643,19 @@ torch.load ET weights_only  (rencontre en test)
   Corrige : psnr() renvoie un float Python, et le chargement passe
   explicitement weights_only=False.
 
+CLUSTER HETEROGENE ET ARCHITECTURE GPU  (rencontre le 26 aout)
+  Un job est tombe sur node032, une GTX 1080 Ti en sm_61, et a echoue des la
+  premiere operation CUDA :
+    "no kernel image is available for execution on the device"
+  Ce n'est pas une erreur de code. PyTorch est livre avec des noyaux
+  PRECOMPILES pour une liste d'architectures ; celle de l'env dncnn couvre
+  sm_75 a sm_120, donc pas les cartes Pascal.
+  La partition short melange des Tesla T4 et des Quadro RTX 6000 (sm_75), des
+  L40S (sm_89), et deux noeuds Pascal inutilisables.
+  Corrige par --exclude=node031,node032 dans train_dncnn.bash.
+  Lecon generale : sur un cluster heterogene, ne jamais supposer qu'un job
+  retombera sur le meme materiel que le precedent.
+
 LES VARIABLES D'ENVIRONNEMENT
   data.py lit ses chemins par os.environ.get("CELEBA_CACHE", "celeba_64_gray.npy").
   Si l'export est oublie, le code cherche le cache dans le repertoire COURANT,

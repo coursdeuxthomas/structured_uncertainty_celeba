@@ -6,6 +6,16 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:1
+#SBATCH --exclude=node031,node032
+#
+# node031 (Pascal) et node032 (GTX 1080 Ti) sont en sm_61. Le torch de l'env
+# dncnn est compile pour sm_75 et au-dela : sur ces deux noeuds il echoue des
+# la premiere operation CUDA avec
+#   "no kernel image is available for execution on the device".
+# Les autres noeuds GPU de la partition conviennent : Tesla T4 et Quadro
+# RTX 6000 en sm_75, L40S en sm_89 (couvert par les binaires sm_86).
+# Pour viser le plus rapide au prix d'une attente plus longue :
+#   #SBATCH --gres=gpu:l40s:1     a la place de la ligne gres ci-dessus
 #SBATCH --output=logs/dncnn_%j.out
 #
 #   mkdir -p logs            <- une seule fois, AVANT le premier sbatch
