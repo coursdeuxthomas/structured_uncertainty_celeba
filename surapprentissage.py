@@ -96,6 +96,17 @@ def main():
     appareil = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.graine)
 
+    # Sur le nœud de connexion du cluster il n'y a pas de GPU : torch bascule
+    # silencieusement sur le CPU et le test met un quart d'heure au lieu de
+    # deux minutes. Autant le dire tout de suite plutôt que de laisser
+    # attendre devant un écran muet.
+    if appareil.type == "cpu":
+        print("/!\\ aucun GPU visible : exécution sur CPU, comptez ~15 min.")
+        print("    Sur le cluster, cela signifie que vous êtes resté sur le")
+        print("    nœud de connexion. Passez par srun ou sbatch.")
+    else:
+        print("GPU : %s" % torch.cuda.get_device_name(0))
+
     dncnn, epoch = charger_dncnn(args.checkpoint, appareil)
     print("DnCNN chargé : %s (epoch %d), gelé." % (args.checkpoint, epoch))
 
