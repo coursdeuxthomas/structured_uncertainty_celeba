@@ -460,6 +460,13 @@ Ni distance de Frobenius, ni divergence de KL. Quatre choses les remplacent.
       terrain, donc le seul valable sur donnees reelles. Il donne en prime une
       carte de sur- et sous-confiance, tres parlante en figure.
 
+      LE CHIFFRE LE PLUS PARLANT DES QUATRE EST L'AUTOCORRELATION DE w.
+      Le modele diagonal ne peut, par construction, que recalibrer l'amplitude
+      pixel par pixel : son w garde la correlation spatiale du residu, environ
+      0,55 a un pixel. Le modele structure doit l'ecraser vers 0. C'est la
+      mesure la plus DIRECTE de ce que les 24 canaux hors-diagonale servent a
+      faire, et elle se lit sur une seule courbe (results/calibration.png).
+
   (4) LES FIGURES QUALITATIVES  (Fig. 7 et 19 de l'article)
       colonne 1 : x propre
       colonne 2 : y bruitee
@@ -471,10 +478,149 @@ Ni distance de Frobenius, ni divergence de KL. Quatre choses les remplacent.
   Pour le debruitage proprement dit : MSE contre x propre, comparee a celle du
   DnCNN seul.
 
+COMMENT LIRE UNE NLL, ET POURQUOI ELLE EST NEGATIVE
+
+  C'est l'unite de TOUS les resultats du projet, et la question "pourquoi
+  c'est negatif ?" tombe presque a coup sur. A relire avant la soutenance.
+
+  D'OU VIENT LE CHIFFRE
+    Le reseau ne predit pas une image, il predit une LOI DE PROBABILITE sur
+    les residus possibles : r ~ N(0, Sigma), ou Sigma depend de mu. Un bon
+    modele est celui qui donne une forte densite aux residus effectivement
+    observes. On maximise donc p(r), ce qui revient a minimiser -log p(r).
+    Le logarithme n'est pas un choix esthetique : la vraisemblance d'un jeu
+    de donnees est un PRODUIT sur toutes les images, et un produit de 200 000
+    nombres inferieurs a 1 tombe sous la precision machine. Le log le
+    transforme en somme.
+
+  POURQUOI DES "NAT"
+    Un nat est l'unite d'information quand le logarithme est NATUREL. Le bit
+    est exactement la meme chose en base 2. Conversion :
+        1 nat = 1 / ln(2) = 1,4427 bit
+    Il n'y a rien d'autre dans ce mot : "nat" signifie "on a pris ln".
+
+  POURQUOI "PAR PIXEL"
+    On divise par n = 4096. Sans cela le chiffre dependrait de la taille de
+    l'image, et on ne pourrait comparer ni deux resolutions, ni ce projet aux
+    deux projets freres. Interpretation : la SURPRISE MOYENNE DU MODELE POUR
+    UN PIXEL. Ou, ce qui revient au meme, le nombre de bits qu'il faudrait
+    pour transmettre un pixel du residu en se servant du modele comme
+    compresseur. Plus c'est bas, mieux le modele predit.
+
+  POURQUOI C'EST NEGATIF   <- le point qui surprend
+    Parce que p est une DENSITE, pas une probabilite.
+      - Une probabilite vaut au plus 1, donc -log p est toujours positif.
+      - Une densite, non. C'est une probabilite PAR UNITE DE LONGUEUR. Quand
+        les valeurs possibles sont serrees dans un petit intervalle, la
+        densite doit etre grande pour compenser, puisque son integrale vaut 1.
+    Exemple chiffre : une gaussienne d'ecart-type 0,06 vaut a son sommet
+        1 / (0,06 * sqrt(2*pi)) = 6,6
+    donc log p = +1,9 et -log p = -1,9.
+    Une NLL negative dit donc une seule chose : LES RESIDUS SONT PETITS. Ce
+    n'est ni un bug, ni un signe de sur-apprentissage.
+
+  LA FORMULE A CONNAITRE
+    Pour une gaussienne d'ecart-type sigma :
+        p(r)      = 1 / sqrt(2*pi*sigma^2) * exp( -r^2 / (2*sigma^2) )
+        -log p(r) = 0,5 * log(2*pi*sigma^2) + r^2 / (2*sigma^2)
+    En moyenne r^2 vaut sigma^2, donc le second terme vaut 0,5, et il reste
+        NLL/pixel = 0,5 * log(2*pi*e*sigma^2) = log(sigma) + 1,4189
+    Dans l'autre sens, et c'est la forme utile :
+        sigma_equivalent = exp( NLL/pixel - 1,4189 )
+    Toute NLL se traduit donc en un ECART-TYPE, c'est-a-dire en un nombre
+    qu'on peut se representer.
+
+  TABLE DE CONVERSION
+        NLL/pixel     sigma equivalent
+          -1,0             0,089
+          -1,5             0,054
+          -2,0             0,033
+          -2,5             0,020
+          -3,0             0,012
+          -4,0             0,0044
+
+  LES ECARTS ENTRE MODELES
+    Un ecart de Delta nat/pixel est un FACTEUR exp(Delta) sur l'ecart-type.
+        0,1 nat -> facteur 1,11          1,0 nat -> facteur 2,72
+        0,5 nat -> facteur 1,65          2,0 nat -> facteur 7,39
+    En bits : multiplier par 1,4427. Pour une image entiere : par 4096.
+
+  LE PIEGE DES UNITES, ET POURQUOI IL JUSTIFIE LA REFERENCE DIAGONALE
+    La valeur ABSOLUE depend de l'echelle des donnees. Nos images vivent dans
+    [-1, 1] ; normalisees dans [0, 1] elles auraient un sigma deux fois plus
+    petit, et TOUTES les NLL baisseraient de log(2) = 0,69 nat/pixel sans
+    qu'aucun modele ne soit devenu meilleur.
+    Seules les DIFFERENCES entre modeles evalues dans les memes unites sont
+    des resultats. C'est un argument de plus pour la reference diagonale : a
+    la question "pourquoi -2,4 c'est bien ?", la reponse n'est jamais "parce
+    que c'est bas", c'est "parce que c'est X nat/pixel sous le modele
+    diagonal, entraine dans exactement les memes conditions".
+
+  LES CHIFFRES DU 26 AOUT (surapprentissage sur 8 images)
+        modele          NLL/pixel     sigma equivalent
+        isotrope         -1,3702           0,0615
+        diagonal         -1,7216           0,0433
+        structure        -4,3358           0,0032
+    Mesure sur 8 images MEMORISEES : c'est une borne superieure qui valide le
+    code, pas un resultat. Les vrais chiffres viendront de eval_cov.py sur le
+    jeu de test.
+
+
 CONTRAINTE TECHNIQUE : tout cela doit s'ecrire sans jamais former Sigma.
   - NLL via apply_LT                       -> O(n * m)
   - calibration via w = L^T r              -> O(n * m)
   - echantillonnage en resolvant L^T eps = u par substitution arriere creuse
+
+
+COMMENT ON REMET LE DETAIL (§5.3), ET POURQUOI PAS AVEC LA METHODE DE
+L'ARTICLE
+
+  Ce que le DnCNN a retire est entierement contenu dans une seule image :
+
+      s = y - mu = (y - x) + (x - mu) = bruit + residu
+
+  Deux choses melangees, dont une seule est a recuperer. Sigma decrit la forme
+  des residus PLAUSIBLES pour un visage ; le bruit blanc ne ressemble a aucun
+  d'eux. Filtrer s a travers Sigma garde donc le detail et jette le bruit.
+  Image finale : mu + f(s).
+
+  L'ARTICLE projette s sur les 1000 premiers vecteurs propres de Sigma. Une
+  decomposition spectrale d'une matrice 4096 x 4096 PAR IMAGE coute O(n^3), et
+  il faudrait d'abord former Sigma, ce que tout le projet s'interdit. Sur 2000
+  images de test, c'est hors de question.
+
+  ON PREND LE FILTRE DE WIENER, qui a la meme intention et qui se simplifie
+  remarquablement :
+
+      f(s) = Sigma (Sigma + tau I)^-1 s = (I + tau Lambda)^-1 s
+
+  La demonstration tient en une ligne : (Sigma + tau I) = Sigma (I + tau
+  Sigma^-1), donc Sigma (Sigma + tau I)^-1 = (I + tau Lambda)^-1. Il n'y a
+  plus de Sigma nulle part, seulement la PRECISION, que le reseau predit
+  directement. Le systeme est symetrique defini positif : gradient conjugue,
+  chaque produit Lambda v = L (L^T v) coutant O(n*m). Aucune matrice n x n,
+  aucune valeur propre. En pratique le solveur converge en une trentaine
+  d'iterations.
+
+  TAU N'EST PAS UN REGLAGE ARBITRAIRE. Si l'on modelise s = r + bruit avec
+  r ~ N(0, Sigma) et un bruit de variance sigma^2 independant, l'esperance a
+  posteriori de r vaut
+
+      E[r | s] = Sigma (Sigma + sigma^2 I)^-1 s
+
+  c'est-a-dire EXACTEMENT ce filtre avec tau = sigma^2. Le tau optimal trouve
+  empiriquement devient donc un diagnostic de plus : proche de sigma^2, la
+  covariance predite est a la bonne echelle ; beaucoup plus grand, le modele
+  est trop confiant et il faut le brider. (L'independance entre r et le bruit
+  est fausse en toute rigueur, puisque r depend de y : c'est une approximation,
+  et le balayage de tau la corrige.)
+
+  CE QUE VAUT LA COMPARAISON. Quand tau tend vers l'infini, f(s) tend vers 0 et
+  l'on retombe exactement sur le DnCNN seul : la reference est un CAS LIMITE de
+  la methode. Un tau choisi sur un jeu de VALIDATION ne peut donc pas faire
+  pire que la reference, et tout gain mesure est reel. C'est aussi pourquoi il
+  risque d'etre modeste : l'adversaire n'est pas un autoencodeur debruiteur
+  comme dans la Table 4 de l'article, c'est un vrai debruiteur.
 
 
 ================================================================================
@@ -537,14 +683,34 @@ FAIT
       ENSEMBLE, sur 8 images a bruit fige. Chaine validee sur un faux cache
       le 26 aout ; reste a la lancer sur les vraies donnees.
 
+  [x] eval_cov.py : NLL sur le jeu de test, ecart avec la reference
+      diagonale, calibration de w = L^T r, echantillonnage par substitution
+      arriere creuse, figure des cinq colonnes. Ecrit results/eval_cov.json,
+      results/echantillons.png et results/calibration.png.
+      Deux briques nouvelles y vivent, apply_L (le transpose de apply_LT) et
+      la resolution de L^T eps = u ; toutes deux verifiees contre la matrice
+      dense en 16x16 par `python eval_cov.py --verif`.
+  [x] denoise.py : filtre de Wiener f(s) = (I + tau Lambda)^-1 s par gradient
+      conjugue, balayage de tau sur un jeu de validation, MSE sur les 2000
+      premieres images de test contre le DnCNN seul. Le solveur est verifie
+      contre une resolution dense en 16x16 par `python denoise.py --verif`.
+  [x] main.py : tableau de bord de l'avancement (lit les JSON, ne lance aucun
+      entrainement) et enchainement des deux etapes d'evaluation.
+  [x] evaluation.bash : job SLURM des deux etapes d'evaluation.
+  [x] Chaine complete rejouee sur un faux cache le 26 aout : entrainement
+      bidon du DnCNN et des deux reseaux de covariance, puis eval_cov.py et
+      denoise.py jusqu'aux figures. Les chiffres n'ont aucun sens (un epoch
+      sur 400 images), c'est le CODE qui est valide.
+
 A FAIRE, DANS CET ORDRE
   [ ] Run du modele structure : sbatch train_cov.bash, relance jusqu'aux
       50 epochs (la partition coupe a 1 h 55, --resume est deja dans le script)
   [ ] Run de la reference diagonale : sbatch train_cov.bash --diagonale
       C'est un SECOND entrainement complet, pas une option d'evaluation.
       Compter le double de GPU. Sans lui, rien n'est demontre.
-  [ ] eval_cov.py : NLL, reference diagonale, calibration, figures
-  [ ] denoise.py : projection du residu, MSE finale
+  [ ] sbatch evaluation.bash  (eval_cov.py puis denoise.py)
+  [ ] Reporter les chiffres de results/eval_cov.json et results/denoise.json
+      dans les sections 4 et 7 de ce fichier.
 
 
 ================================================================================
@@ -722,6 +888,37 @@ LES VARIABLES D'ENVIRONNEMENT
   Les exports ne survivent pas a la deconnexion SSH : ils doivent figurer dans
   chaque script sbatch, ou une fois pour toutes dans ~/.bashrc.
 
+LES DEUX SENS DU MOTIF DE PARCIMONIE  (rencontre en ecrivant eval_cov.py)
+  build_neighbor_indices repond a : << pour la LIGNE i de L, quels pixels j
+  (avant i) portent une valeur non nulle ? >>. C'est ce qu'il faut pour la NLL.
+  La substitution arriere qui echantillonne pose la question INVERSE : << dans
+  la COLONNE i de L, quels pixels j (apres i) portent une valeur non nulle ?
+  >>. La reponse s'obtient en changeant le signe du decalage, mais se tromper
+  de sens ne fait pas planter le code : il tire simplement des echantillons
+  d'une autre loi, silencieusement. D'ou le test `eval_cov.py --verif`, qui
+  verifie que L^T eps redonne bien u, puis que la covariance empirique de 4000
+  tirages redonne bien la Sigma predite.
+
+LA MSE EN [0, 1] CONTRE LA MSE EN [-1, 1]
+  Meme piege que le facteur 2 sur sigma, une marche plus loin : la MSE de la
+  litterature (et la Table 4 de l'article) se compte en [0, 1], la notre en
+  [-1, 1]. Le rapport est de QUATRE, pas de deux. denoise.py affiche la version
+  [0, 1] pour rester comparable, et garde les deux dans son JSON.
+
+TAU AU BORD DE LA GRILLE : DEUX LECTURES OPPOSEES
+  Si le balayage choisit le tau le plus PETIT, f(s) tend vers s et mu + f(s)
+  tend vers y : le filtre prefere l'image bruitee au debruitage, ce qui accuse
+  le DnCNN ou la covariance. S'il choisit le plus GRAND, f(s) tend vers 0 et
+  l'on retombe sur mu : il n'y a rien a recuperer. Confondre les deux ferait
+  passer un aveu d'echec pour un reglage a affiner ; denoise.py les distingue
+  explicitement.
+
+UN CHECKPOINT DE COVARIANCE NE SE DEVINE PAS
+  Charger des poids diagonaux dans un reseau instancie en mode structure ne
+  plante pas : le reseau produit alors 24 canaux hors-diagonale que personne
+  n'a entraines. eval_cov.py lit donc le mode dans la cle "diagonale" du
+  checkpoint et refuse de demarrer si elle manque.
+
 
 ================================================================================
 12. CE QUI RESTE INCERTAIN
@@ -758,6 +955,21 @@ LA REPRISE SUR CHECKPOINT.
   sauvegarder l'optimiseur ET le numero d'epoch des la premiere version, sinon
   des runs seront perdus.
 
+LE GAIN DU DEBRUITAGE N'EST PAS ACQUIS, ET C'EST ASSUME.
+  A sigma = 25/255, le bruit vaut 0,196 en unites [-1, 1] tandis que le residu
+  a recuperer vaut 0,064 : le bruit est TROIS FOIS plus gros que le signal que
+  le filtre cherche a extraire de s. Il est possible que le tau optimal parte
+  vers le haut de la grille, c'est-a-dire que le filtre choisisse de ne rien
+  remettre du tout. Ce serait un resultat negatif propre, a annoncer tel quel :
+  la reference du §5.3 est ici un vrai debruiteur, pas l'autoencodeur de la
+  Table 4.
+  Cela ne remettrait rien en cause de la partie centrale du projet : la NLL, la
+  reference diagonale et la calibration se suffisent a elles-memes. Le §5.3
+  est une APPLICATION du modele de covariance, pas sa justification.
+  Si le cas se presente, la parade la plus simple est de refaire l'experience a
+  un sigma plus faible (par exemple 10/255), ou l'ecart entre le bruit et le
+  residu est bien moindre.
+
 LE BIAIS DU JEU DE DONNEES.
   CelebA, ce sont des celebrites photographiees par des professionnels : biais
   net en pose, en eclairage et en demographie. Cela n'invalide rien, mais cela
@@ -791,9 +1003,13 @@ DOCUMENTS DU DEPOT
   cov_model.py               le reseau de covariance
   surapprentissage.py        test conjoint de loss.py et cov_model.py
   train_cov.py               entrainement du reseau de covariance
+  eval_cov.py                NLL, reference diagonale, calibration, figures
+  denoise.py                 l'application du §5.3, filtre de Wiener
+  main.py                    tableau de bord et enchainement des evaluations
   train_dncnn.bash           job SLURM du debruiteur
   surapprentissage.bash      job SLURM du test de surapprentissage
   train_cov.bash             job SLURM du reseau de covariance
+  evaluation.bash            job SLURM de eval_cov.py + denoise.py
   explication_dncnn.txt      commentaire des trois fichiers ci-dessus
 
 DOCUMENTS DE CE DOSSIER
