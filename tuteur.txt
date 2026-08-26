@@ -514,6 +514,21 @@ FAIT
   [x] verifier_residu.py relance sur le modele final. Verdict inchange, et la
       reserve de la section 12 est LEVEE (voir la-bas, c'est un resultat).
   [x] STD_RESIDU recalibre dans cov_model.py : 0,0698 -> 0,0640.
+  [x] surapprentissage.py PASSE sur les vraies donnees (26 aout).
+      NLL/pixel a l'initialisation      -1,3683
+      gaussienne isotrope ajustee       -1,3702
+      apres surapprentissage, diagonal  -1,7216
+      apres surapprentissage, structure -4,3358
+      L'initialisation tombe a 0,002 nat/pixel de la gaussienne isotrope
+      ajustee, ce qui est la valeur calculee a la main : STD_RESIDU,
+      l'initialisation a zero de la tete et le terme n*log(2*pi) de la NLL
+      concordent au millieme. La chaine loss.py + cov_model.py est juste.
+      NE PAS CITER les 2,6 nat/pixel d'ecart comme un resultat : c'est mesure
+      sur 8 images memorisees, donc une borne superieure. Le vrai chiffre
+      viendra de eval_cov.py sur le jeu de test.
+  [x] train_cov.py + train_cov.bash : entrainement en deux temps, DnCNN gele,
+      reprise sur checkpoint, garde-fou anti-NaN, noms de fichiers distincts
+      pour les deux runs. Chaine testee sur un faux cache.
   [x] loss.py : repris du projet ellipses, f = 7, clamp de log_diag ajoute.
       Les trois blocs de tests passent : algorithme en 16x16 valide contre la
       matrice dense (erreur 4,8e-07), formes en 64x64, saturation du clamp.
@@ -523,10 +538,11 @@ FAIT
       le 26 aout ; reste a la lancer sur les vraies donnees.
 
 A FAIRE, DANS CET ORDRE
-  [ ] surapprentissage.py sur les vraies donnees. La NLL doit s'effondrer et
-      le modele structure doit battre le diagonal. Deux minutes, contre cinq
-      heures pour un vrai entrainement : a faire AVANT train_cov.py.
-  [ ] train_cov.py : entrainement en deux temps, DnCNN gele
+  [ ] Run du modele structure : sbatch train_cov.bash, relance jusqu'aux
+      50 epochs (la partition coupe a 1 h 55, --resume est deja dans le script)
+  [ ] Run de la reference diagonale : sbatch train_cov.bash --diagonale
+      C'est un SECOND entrainement complet, pas une option d'evaluation.
+      Compter le double de GPU. Sans lui, rien n'est demontre.
   [ ] eval_cov.py : NLL, reference diagonale, calibration, figures
   [ ] denoise.py : projection du residu, MSE finale
 
@@ -774,6 +790,10 @@ DOCUMENTS DU DEPOT
   loss.py                    la NLL gaussienne structuree creuse
   cov_model.py               le reseau de covariance
   surapprentissage.py        test conjoint de loss.py et cov_model.py
+  train_cov.py               entrainement du reseau de covariance
+  train_dncnn.bash           job SLURM du debruiteur
+  surapprentissage.bash      job SLURM du test de surapprentissage
+  train_cov.bash             job SLURM du reseau de covariance
   explication_dncnn.txt      commentaire des trois fichiers ci-dessus
 
 DOCUMENTS DE CE DOSSIER
