@@ -779,9 +779,14 @@ FAIT
         pour le DnCNN seul (+0,22 %, +0,010 dB, 63 % des images ameliorees).
         Voir la section 7 : ce quasi-zero est demontrable, pas accidentel.
 
+  [x] RUN DU MODELE STRUCTURE TERMINE (27 aout, 08 h). Les 50 epochs ont
+      demande quatre jobs : trois coupes a 1 h 55 par la partition, le
+      quatrieme termine en 51 minutes. Soit environ 6 h 30 au total, ~8 min
+      par epoch sur Tesla T4. La chaine de dependances a fonctionne : les deux
+      jobs suivants ont demarre, vu qu'il n'y avait plus rien a faire et
+      rendu la main en quinze secondes.
+
 A FAIRE, DANS CET ORDRE
-  [ ] Run du modele structure : sbatch train_cov.bash, relance jusqu'aux
-      50 epochs (la partition coupe a 1 h 55, --resume est deja dans le script)
   [ ] Run de la reference diagonale : sbatch train_cov.bash --diagonale
       C'est un SECOND entrainement complet, pas une option d'evaluation.
       Compter le double de GPU. Sans lui, rien n'est demontre.
@@ -1026,6 +1031,33 @@ TAU AU BORD DE LA GRILLE : DEUX LECTURES OPPOSEES
   l'on retombe sur mu : il n'y a rien a recuperer. Confondre les deux ferait
   passer un aveu d'echec pour un reglage a affiner ; denoise.py les distingue
   explicitement.
+
+GPU OCCUPE, ET UNE CHAINE DE JOBS QUI SE VIDE  (rencontre le 27 aout)
+  En lancant la reference diagonale en parallele du run structure, le job est
+  mort en trois secondes sur :
+    CUDA error: CUDA-capable device(s) is/are busy or unavailable
+  Ce n'est pas une erreur de code. Le GPU etait en mode de calcul EXCLUSIF et
+  deja tenu par un autre processus. Detail qui trompe : la carte s'affiche et
+  torch.cuda.is_available() repond True, parce que ces appels ne creent pas de
+  contexte CUDA. Seule la premiere ALLOCATION echoue.
+  Le vrai degat est ailleurs : les jobs suivants etaient chaines en
+  --dependency=afterany, qui se declenche aussi sur echec. Six jobs ont donc
+  demarre et echoue les uns apres les autres en vingt secondes, et la file
+  s'est videe toute seule. C'est le prix a payer de afterany, qui reste
+  indispensable puisqu'un job coupe a 1 h 55 finit lui aussi en echec.
+  Corrige dans train_cov.bash : un test CUDA d'une ligne avant l'entrainement,
+  et scontrol requeue si le GPU est inutilisable. Le job garde son JobID, donc
+  la chaine derriere lui survit, et il repart sur un autre noeud.
+
+  ET UN SECOND PIEGE, CACHE DERRIERE LE PREMIER. sacct affichait COMPLETED
+  pour ces six jobs morts en huit secondes. Raison : le script sbatch se
+  terminait par un echo et un date, dont le code de sortie 0 ecrasait celui de
+  python. SLURM enregistrait donc un succes pour un entrainement qui n'avait
+  jamais demarre. On cherche alors la panne partout sauf la ou elle est, et
+  --dependency=afterok ne protegerait de rien. Corrige : les scripts capturent
+  le code de sortie de python et le rendent a SLURM.
+  Regle generale : un script sbatch doit finir par exit sur le code du calcul,
+  jamais sur une commande d'affichage.
 
 UN CHECKPOINT DE COVARIANCE NE SE DEVINE PAS
   Charger des poids diagonaux dans un reseau instancie en mode structure ne

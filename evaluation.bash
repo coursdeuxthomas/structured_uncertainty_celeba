@@ -41,6 +41,13 @@ export CELEBA_CACHE=$HOME/data/celeba/celeba_64_gray.npy
 # -u : sortie non tamponnee, meme raison que dans train_dncnn.bash.
 # main.py --evaluation enchaine les deux scripts et s'arrete au premier echec.
 python -u main.py --evaluation "$@"
+code=$?
 
+# Le code de sortie de python doit remonter a SLURM. Sans le "exit $code"
+# ci-dessous, le dernier "date" reussit et le job est enregistre COMPLETED
+# meme si l'entrainement a plante : sacct affiche alors des succes partout et
+# on cherche la panne ailleurs. C'est exactement ce qui s'est passe le
+# 27 aout avec les six jobs diagonaux morts en huit secondes.
 echo "Job finished:"
 date
+exit $code
