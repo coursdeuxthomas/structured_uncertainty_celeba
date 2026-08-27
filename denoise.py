@@ -49,9 +49,32 @@ CE QUE VAUT LA COMPARAISON
     Quand tau tend vers l'infini, f(s) tend vers 0 et l'on retombe exactement
     sur le DnCNN seul. La référence est donc un CAS LIMITE de la méthode : un
     tau choisi sur un jeu de validation ne peut pas faire pire, et tout gain
-    mesuré est réel. C'est aussi pour cela que le gain risque d'être modeste —
-    l'adversaire, ici, n'est pas un autoencodeur débruiteur comme dans la
-    Table 4 de l'article, c'est un vrai débruiteur.
+    mesuré est réel.
+
+ET POURQUOI CE GAIN SERA QUASI NUL — à lire avant de s'en étonner
+    Le DnCNN est entraîné en MSE, et le minimiseur de la MSE est la MOYENNE
+    CONDITIONNELLE : à l'optimum, mu(y) = E[x | y], donc E[r | y] = 0. Or
+    s = y - mu(y) est une fonction déterministe de y. Pour toute correction
+    additive g(y) :
+
+        E||x - mu - g||^2 = E||r||^2 - 2 E[r . g(y)] + E||g||^2
+                          = E||r||^2 + E||g||^2   >=  E||r||^2
+
+    puisque E[r . g(y)] = E[ E[r|y] . g(y) ] = 0. AUCUNE correction calculée à
+    partir de y ne peut réduire la MSE d'un débruiteur MSE-optimal, et la
+    meilleure est g = 0. Le gain mesuré ici ne dit donc rien de la qualité de
+    la covariance : il mesure L'ÉCART DU DnCNN À L'OPTIMUM, ce qui reste un
+    résultat en soi.
+
+    L'article n'a pas ce problème : son mu vient d'un VAE qui n'a JAMAIS vu de
+    bruit, donc très loin de E[x|y], d'où les 40 % de la Table 4. Notre
+    variante remplace ce VAE par un vrai débruiteur, et c'est exactement ce qui
+    rend le §5.3 structurellement ingrat ici.
+
+    Ce que la covariance apporte est ailleurs, et ne se mesure pas en MSE : mu
+    est flou parce qu'une moyenne conditionnelle est floue, et mu + eps
+    échantillonné est net. C'est le compromis perception / distorsion, et c'est
+    l'objet de la figure de eval_cov.py, pas de ce tableau.
 
 Sorties :
     results/denoise.json
@@ -434,11 +457,15 @@ def main():
         print("GAIN DU MODÈLE STRUCTURÉ SUR LE DnCNN SEUL : %+.2f %% de MSE,"
               " %+.3f dB" % (gain, resultats["structuré"]["psnr"]
                              - reference["psnr"]))
-        if gain <= 0.05:
-            print("  Gain nul : le filtre a choisi de ne rien remettre. Cela")
-            print("  se lit — à sigma = 25/255 le bruit est 3 fois plus gros")
-            print("  que le résidu, et il n'y a peut-être rien à récupérer")
-            print("  sans en rajouter. À dire tel quel plutôt qu'à cacher.")
+        if gain <= 1.0:
+            print("  Gain quasi nul, et c'est ATTENDU : le DnCNN est entraîné")
+            print("  en MSE, donc mu approche E[x|y] et E[r|y] = 0. Comme")
+            print("  s = y - mu est une fonction de y, aucune correction")
+            print("  additive ne peut réduire la MSE. Ce %+.2f %% mesure"
+                  % gain)
+            print("  l'écart du DnCNN à l'optimum, pas la qualité de Sigma.")
+            print("  Voir le docstring de ce fichier et la section 7 de")
+            print("  tuteur.txt avant d'y voir un échec.")
 
     sortie = {
         "n_images": n_test,

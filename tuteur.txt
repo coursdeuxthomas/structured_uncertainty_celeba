@@ -44,8 +44,15 @@ L'ordre qui se raconte le mieux :
                    de calibration. (section 7)
   8. Ou j'en suis : (section 8)
 
+  9. La chute    : le §5.3 ne gagne rien en MSE, et c'est DEMONTRABLE ; ce que
+                   la covariance apporte se voit sur une image, pas dans un
+                   tableau. (section 7, fin)
+
 Si le temps manque, les points 3, 4 et 7 sont ceux qui montrent qu'on a compris
 le sujet. Le reste est du contexte.
+
+Et si une seule chose doit rester : results/echantillons.png, colonne diagonale
+contre colonne structuree. Toute la these du projet est dans cette paire.
 
 
 ================================================================================
@@ -59,10 +66,16 @@ On entraine un second reseau qui apprend la COVARIANCE STRUCTUREE du residu
 r = x - mu, ou mu = DnCNN(y) est l'image debruitee et x l'image propre. Cette
 covariance decrit a quoi ressemble le detail perdu.
 
-On peut alors soit echantillonner un residu plausible et le rajouter, ce qui
-donne une image nette au lieu de lisse, soit projeter ce que le DnCNN a retire
-sur l'espace des residus plausibles, ce qui recupere le detail sans recuperer
-le bruit. C'est l'application du paragraphe 5.3 de l'article.
+On peut alors ECHANTILLONNER un residu plausible et le rajouter : l'image
+devient nette au lieu de lisse. On peut aussi PROJETER ce que le DnCNN a retire
+sur l'espace des residus plausibles, ce qui est l'application du paragraphe 5.3
+de l'article.
+
+Nuance mesuree le 26 aout, a ne pas escamoter : cette seconde voie ne gagne
+RIEN en MSE face a un vrai debruiteur, et c'est demontrable (section 7). Le
+detail se recupere, mais pas en deplacant la moyenne. La covariance ne sert pas
+a faire une meilleure image au sens de l'erreur quadratique, elle sert a decrire
+la LOI des images plausibles — et cela, aucune variance par pixel ne le fait.
 
 
 ================================================================================
@@ -618,9 +631,48 @@ L'ARTICLE
   CE QUE VAUT LA COMPARAISON. Quand tau tend vers l'infini, f(s) tend vers 0 et
   l'on retombe exactement sur le DnCNN seul : la reference est un CAS LIMITE de
   la methode. Un tau choisi sur un jeu de VALIDATION ne peut donc pas faire
-  pire que la reference, et tout gain mesure est reel. C'est aussi pourquoi il
-  risque d'etre modeste : l'adversaire n'est pas un autoencodeur debruiteur
-  comme dans la Table 4 de l'article, c'est un vrai debruiteur.
+  pire que la reference, et tout gain mesure est reel.
+
+  ET POURQUOI CE GAIN EST QUASI NUL — LE POINT LE PLUS SUBTIL DU PROJET, A
+  PREPARER AVANT LA SOUTENANCE.
+
+  Mesure du 26 aout : 1,026e-3 contre 1,028e-3, soit +0,22 %. Autant dire rien.
+  Ce n'est ni un bug ni une deception, c'est une consequence de ce qu'est un
+  debruiteur entraine en MSE, et cela se demontre en trois lignes.
+
+  Le minimiseur de la MSE est la MOYENNE CONDITIONNELLE. A l'optimum,
+
+      mu(y) = E[x | y]        donc        E[r | y] = 0.
+
+  Or s = y - mu(y) est une FONCTION DETERMINISTE DE y. Donc, pour n'importe
+  quelle correction additive g(y) — la notre, une autre, la meilleure
+  imaginable :
+
+      E||x - mu - g||^2 = E||r||^2 - 2 E[r . g(y)] + E||g||^2
+                        = E||r||^2 + E||g||^2      >=   E||r||^2
+
+  puisque E[r . g(y)] = E[ E[r|y] . g(y) ] = 0. Le terme croise s'annule, il ne
+  reste qu'un terme positif : TOUTE correction calculee a partir de y augmente
+  la MSE. La meilleure est g = 0, c'est-a-dire le DnCNN seul.
+
+  Ce que mesure alors notre +0,22 %, c'est L'ECART DU DnCNN A L'OPTIMUM. Il est
+  petit, ce qui est un compliment pour le debruiteur. Et le balayage l'a trouve
+  tout seul : tau* = 10 sigma^2, dix fois plus severe que la valeur theorique,
+  c'est-a-dire << ne remets presque rien >>.
+
+  L'ARTICLE N'A PAS CE PROBLEME, et c'est la difference a expliquer au tuteur :
+  son mu vient d'un VAE qui n'a JAMAIS vu de bruit. Il est donc tres loin de
+  E[x|y], il reste enormement a recuperer, d'ou les 40 % de la Table 4. En
+  remplacant ce VAE par un vrai debruiteur, on rend le §5.3 structurellement
+  ingrat. Le resultat honnete est : la methode ne peut pas ameliorer un
+  estimateur deja MSE-optimal, et la Table 4 mesure surtout la faiblesse du VAE
+  comme debruiteur.
+
+  ET CE N'EST PAS LA QUE LA COVARIANCE SERT. mu est flou PARCE QUE c'est une
+  moyenne conditionnelle : la MSE recompense le flou. mu + eps echantillonne
+  est net. La covariance ne deplace pas la moyenne, elle decrit la LOI autour
+  d'elle — c'est le compromis perception / distorsion, et cela se lit sur
+  results/echantillons.png, pas dans un tableau de MSE.
 
 
 ================================================================================
@@ -701,6 +753,31 @@ FAIT
       bidon du DnCNN et des deux reseaux de covariance, puis eval_cov.py et
       denoise.py jusqu'aux figures. Les chiffres n'ont aucun sens (un epoch
       sur 400 images), c'est le CODE qui est valide.
+
+  [x] PREMIERS CHIFFRES REELS (26 aout, nuit). Modele structure a l'epoch 38
+      (le run continuait), 500 images de test, PAS DE REFERENCE DIAGONALE
+      ENCORE : ces valeurs sont PROVISOIRES et ne demontrent pas encore ce
+      qu'apporte la structure. Elles disent en revanche que la chaine marche.
+
+        NLL structure         -2,2497 +/- 0,258 nat/pixel  (sigma eq. 0,0255)
+        plancher isotrope     -1,3278                       (sigma eq. 0,0641)
+        ecart                  0,9219 nat/pixel = facteur 2,5 sur l'ecart-type
+        variance de w = L^T r  0,947   (l'ideal est 1)
+        autocorr. de w a 1 px  0,014   (contre ~0,55 pour le residu brut)
+
+      LES DEUX CHIFFRES QUI COMPTENT SONT LES DEUX DERNIERS, et ils ne
+      dependent pas de la reference diagonale :
+      - var(w) = 0,947 sur des donnees JAMAIS VUES : le modele n'est ni trop
+        confiant ni trop prudent, a 5 % pres. Rien n'y forcait.
+      - l'autocorrelation passe de ~0,55 a 0,014. Un modele diagonal ne PEUT
+        PAS faire cela : il ne recalibre qu'une amplitude, pixel par pixel. Ce
+        blanchiment est donc, a lui seul, la preuve que les 24 canaux
+        hors-diagonale servent. La reference diagonale viendra le chiffrer en
+        nats, elle ne fera pas apparaitre un resultat qui n'est pas la.
+
+        debruitage : tau* = 0,384 = 10 sigma^2, MSE 1,026e-3 contre 1,028e-3
+        pour le DnCNN seul (+0,22 %, +0,010 dB, 63 % des images ameliorees).
+        Voir la section 7 : ce quasi-zero est demontrable, pas accidentel.
 
 A FAIRE, DANS CET ORDRE
   [ ] Run du modele structure : sbatch train_cov.bash, relance jusqu'aux
@@ -806,9 +883,46 @@ R. C'est la resolution de l'article. Et le cout de la covariance structuree
    prealable.
 
 Q. Quel est le gain pratique, concretement ?
-R. Le paragraphe 5.3 : projeter le residu retire par le debruiteur sur
-   l'espace des residus plausibles. On recupere du detail sans recuperer du
-   bruit. Mesure par la MSE contre l'image propre, comparee au DnCNN seul.
+R. Pas en MSE, et je peux dire pourquoi. Mesure : 1,026e-3 contre 1,028e-3
+   pour le DnCNN seul, soit +0,22 %. Un debruiteur entraine en MSE approche la
+   moyenne conditionnelle E[x|y], donc E[r|y] = 0 ; et comme s = y - mu est une
+   fonction de y, aucune correction additive calculee a partir de y ne peut
+   reduire la MSE (demonstration en section 7). Ce +0,22 % mesure l'ecart du
+   DnCNN a l'optimum, pas la qualite de la covariance.
+   Le gain est ailleurs : mu est flou PARCE QUE c'est une moyenne, et mu + eps
+   echantillonne est net et realiste. La covariance donne acces a la loi des
+   residus, donc a des images plausibles, pas a une meilleure moyenne.
+
+Q. Alors pourquoi l'article annonce-t-il 40 % de gain, et pas vous ?
+R. Parce que leur mu vient d'un VAE qui n'a JAMAIS vu de bruit : il est tres
+   loin de E[x|y], donc il reste enormement a recuperer. Leur Table 4 mesure
+   surtout la faiblesse du VAE comme debruiteur. En prenant un vrai debruiteur
+   comme reference, on se donne un adversaire deja optimal pour ce critere.
+   C'est une comparaison plus honnete, et elle est moins flatteuse.
+
+Q. Votre image echantillonnee a un PSNR moins bon. Pourquoi la montrer ?
+R. C'est le compromis perception / distorsion (Blau et Michaeli, CVPR 2018).
+   La moyenne conditionnelle est l'image la plus FLOUE possible : c'est ce que
+   la MSE recompense. Des qu'on ajoute du detail realiste, on s'ecarte de cette
+   moyenne. Le prix est chiffrable : si le modele est calibre, eps a la meme
+   energie que r et lui est independant, donc la MSE DOUBLE, soit exactement
+   -3,01 dB. Trois decibels contre de la nettete, c'est un choix, pas un defaut.
+
+Q. Le detail que vous ajoutez est-il vrai ?
+R. Non : il est PLAUSIBLE. C'est un tirage dans la loi apprise, pas le residu
+   reel de cette image. Un autre tirage donnerait d'autres cheveux, tout aussi
+   credibles. La loi est juste, une realisation ne l'est pas. Pour un usage ou
+   le detail engage une decision — imagerie medicale, expertise — un echantillon
+   ne doit jamais etre presente comme une reconstruction.
+
+Q. Votre calibration pourrait-elle etre un hasard ?
+R. Non, pour deux raisons. La variance de w = L^T r vaut 0,947 pour un ideal de
+   1, mesuree sur des images JAMAIS VUES a l'entrainement : rien n'y forcait, le
+   modele pouvait etre systematiquement trop confiant ou trop prudent. Et
+   l'autocorrelation a 1 pixel passe de ~0,55 sur le residu a 0,014 sur w. Un
+   modele diagonal ne PEUT PAS produire ce blanchiment : multiplier chaque pixel
+   par un scalaire ne change pas la correlation entre voisins. Seuls les 24
+   canaux hors-diagonale le peuvent.
 
 Q. Pourquoi 25 valeurs par pixel et pas plus ?
 R. f = 7 donne (49-1)/2 = 24 voisins dans le triangle inferieur, plus la
@@ -955,20 +1069,19 @@ LA REPRISE SUR CHECKPOINT.
   sauvegarder l'optimiseur ET le numero d'epoch des la premiere version, sinon
   des runs seront perdus.
 
-LE GAIN DU DEBRUITAGE N'EST PAS ACQUIS, ET C'EST ASSUME.
-  A sigma = 25/255, le bruit vaut 0,196 en unites [-1, 1] tandis que le residu
-  a recuperer vaut 0,064 : le bruit est TROIS FOIS plus gros que le signal que
-  le filtre cherche a extraire de s. Il est possible que le tau optimal parte
-  vers le haut de la grille, c'est-a-dire que le filtre choisisse de ne rien
-  remettre du tout. Ce serait un resultat negatif propre, a annoncer tel quel :
-  la reference du §5.3 est ici un vrai debruiteur, pas l'autoencodeur de la
-  Table 4.
-  Cela ne remettrait rien en cause de la partie centrale du projet : la NLL, la
-  reference diagonale et la calibration se suffisent a elles-memes. Le §5.3
-  est une APPLICATION du modele de covariance, pas sa justification.
-  Si le cas se presente, la parade la plus simple est de refaire l'experience a
-  un sigma plus faible (par exemple 10/255), ou l'ecart entre le bruit et le
-  residu est bien moindre.
+LE GAIN DU DEBRUITAGE EST NUL, ET C'EST DEMONTRABLE  (tranche le 26 aout)
+  Mesure : +0,22 % de MSE, +0,010 dB. La question n'est plus << est-ce que ca
+  marchera >> mais << pourquoi ca ne pouvait pas marcher >>, et la reponse est
+  en section 7 : un debruiteur entraine en MSE approche E[x|y], donc E[r|y] = 0,
+  donc aucune correction calculee a partir de y ne peut reduire la MSE.
+  A NOTER : la premiere explication ecrite ici — << le bruit est trois fois plus
+  gros que le residu >> — ETAIT FAUSSE, ou du moins hors sujet. Elle suggerait
+  de refaire l'experience a sigma = 10/255. Cela n'aurait rien change :
+  l'argument de la moyenne conditionnelle ne fait intervenir sigma nulle part.
+  Autant le dire, c'est le genre d'erreur que le tuteur reperera.
+  Cela ne remet rien en cause de la partie centrale du projet : la NLL, la
+  reference diagonale et la calibration se suffisent a elles-memes. Le §5.3 est
+  une APPLICATION du modele de covariance, pas sa justification.
 
 LE BIAIS DU JEU DE DONNEES.
   CelebA, ce sont des celebrites photographiees par des professionnels : biais

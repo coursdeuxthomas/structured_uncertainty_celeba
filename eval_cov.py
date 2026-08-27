@@ -548,8 +548,19 @@ def main():
         pas = max(1, plat.numel() // 200000)
         stats[nom]["_echantillon_w"] = plat[::pas].numpy()
 
-    profil_residu = profil_radial(
-        autocorrelation_2d(r.reshape(-1, IMAGE_SIZE, IMAGE_SIZE).cpu().numpy()))
+    # Le résidu doit être mesuré EXACTEMENT comme w, sinon les lignes du
+    # tableau ne sont pas comparables. Piège : le profil radial au rayon 1
+    # moyenne les 4 voisins orthogonaux ET les 4 diagonaux (distance 1,41,
+    # arrondie à 1), ce qui donne un chiffre nettement plus bas que
+    # l'autocorrélation horizontale/verticale de verifier_residu.py — 0,46 au
+    # lieu de 0,55 sur le résidu du DnCNN. On garde les deux : la moyenne h/v
+    # pour le tableau, le profil radial pour la figure.
+    auto_residu = autocorrelation_2d(
+        r.reshape(-1, IMAGE_SIZE, IMAGE_SIZE).cpu().numpy())
+    centre = auto_residu.shape[0] // 2
+    autocorr_residu_hv = 0.5 * float(auto_residu[centre, centre + 1]
+                                     + auto_residu[centre + 1, centre])
+    profil_residu = profil_radial(auto_residu)
 
     # ---- figures ---------------------------------------------------------
     # Images réparties sur tout le jeu de test plutôt que les premières :
@@ -603,7 +614,7 @@ def main():
     # Dernière ligne : le point de départ. NLL d'une gaussienne isotrope, et
     # l'autocorrélation du résidu BRUT, celle que le blanchi doit effacer.
     print("%-12s %+9.4f %6s %10.4f %10s %12.3f"
-          % ("résidu brut", nll_isotrope, "", std_r, "-", profil_residu[1][1]))
+          % ("résidu brut", nll_isotrope, "", std_r, "-", autocorr_residu_hv))
     print("=" * 78)
 
     sortie = {
@@ -616,7 +627,8 @@ def main():
         "calibration": {nom: {k: v for k, v in S.items()
                               if not k.startswith("_")}
                         for nom, S in stats.items()},
-        "autocorr_residu_1px": float(profil_residu[1][1]),
+        "autocorr_residu_1px": autocorr_residu_hv,
+        "autocorr_residu_1px_radial": float(profil_residu[1][1]),
     }
 
     if "diagonal" in resultats:
