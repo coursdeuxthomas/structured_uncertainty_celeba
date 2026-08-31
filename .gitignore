@@ -13,7 +13,16 @@ data_cache/
 article.pdf
 
 # ---- Sorties d'entraînement ----
-results/
+# results/ est ignoré SAUF les figures finales et les JSON de résultats : ce
+# sont eux qui font la preuve du travail, et un dépôt qui ne montre que du code
+# n'apprend rien à un lecteur. Tout le reste (checkpoints, cache, logs) reste
+# hors du dépôt.
+results/*
+!results/*.json
+!results/residu.png
+!results/echantillons.png
+!results/calibration.png
+!results/denoise.png
 runs/
 checkpoints/
 *.pt

@@ -216,3 +216,32 @@ Prochaine étape du projet : `dncnn.py` puis `train_dncnn.py`, et surtout la
 vérification critique de la roadmap — afficher `r = x - DnCNN(y)` et
 s'assurer qu'il contient des structures visibles et pas du bruit blanc. Si le
 résidu est blanc, le projet n'a pas d'objet.
+
+## Git : aller et venir entre le poste et le cluster
+
+Ce bloc vivait dans le README ; il en a ete retire quand celui-ci est passe
+en anglais et s'est recentre sur le projet lui-meme.
+
+**Pousser depuis le cluster.** Une fois par machine, créer une clé SSH et la
+déclarer sur GitHub (Settings > SSH and GPG keys) :
+
+```bash
+git config --global user.name  "Thomas"
+git config --global user.email "ts.bouru@gmail.com"
+
+ssh-keygen -t ed25519 -C "ts.bouru@gmail.com"   # Entrée trois fois
+cat ~/.ssh/id_ed25519.pub                       # à coller sur GitHub
+
+ssh -T git@github.com                           # doit répondre "Hi coursdeuxthomas!"
+git remote set-url origin git@github.com:coursdeuxthomas/structured_uncertainty_celeba.git
+```
+
+Ensuite, dans les deux sens :
+
+```bash
+git add -A && git commit -m "..." && git push    # cluster  -> GitHub
+git pull                                         # GitHub   -> poste local
+```
+
+Toujours faire `git pull` avant de reprendre le travail sur l'autre machine :
+c'est le melange de deux copies modifiees sans `pull` qui produit les conflits.

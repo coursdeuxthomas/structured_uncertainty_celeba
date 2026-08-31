@@ -1,82 +1,83 @@
 """
-L'application du §5.3 : récupérer le détail que le DnCNN a effacé.
+The §5.3 application: recovering the detail the DnCNN erased.
 
-    python denoise.py                   # balaye tau, puis évalue sur 2000 images
-    python denoise.py --tau 0.038       # tau imposé
-    python denoise.py --verif           # auto-test du solveur, sans données
+    python denoise.py                   # sweep tau, then evaluate on 2000 images
+    python denoise.py --tau 0.038       # tau imposed
+    python denoise.py --verif           # solver self-test, no data needed
 
-L'IDÉE
-    mu = DnCNN(y) est lisse : le débruiteur a enlevé le bruit ET le détail
-    haute-fréquence. Ce qu'il a retiré est entièrement contenu dans
+THE IDEA
+    mu = DnCNN(y) is smooth: the denoiser removed the noise AND the
+    high-frequency detail. What it took away is entirely contained in
 
-        s = y - mu = (y - x) + (x - mu) = bruit + résidu
+        s = y - mu = (y - x) + (x - mu) = noise + residual
 
-    Deux choses mélangées, dont une seule est à récupérer. Sigma décrit la
-    forme des résidus PLAUSIBLES pour un visage ; le bruit blanc, lui, ne
-    ressemble à aucun résidu plausible. Filtrer s à travers Sigma garde donc le
-    détail et jette le bruit. Image finale : mu + f(s).
+    Two things mixed together, only one of which is to be recovered. Sigma
+    describes the shape of the residuals that are PLAUSIBLE for a face; white
+    noise, for its part, resembles no plausible residual at all. Filtering s
+    through Sigma therefore keeps the detail and throws the noise away. Final
+    image: mu + f(s).
 
-LE FILTRE, ET POURQUOI CE N'EST PAS CELUI DE L'ARTICLE
-    L'article projette s sur les 1000 premiers vecteurs propres de Sigma. Une
-    décomposition spectrale d'une matrice 4096 x 4096 par image coûte O(n^3) ;
-    sur 2000 images c'est hors de question (et il faudrait former Sigma, ce que
-    tout le projet s'interdit).
+THE FILTER, AND WHY IT IS NOT THE ONE FROM THE PAPER
+    The paper projects s onto the first 1000 eigenvectors of Sigma. A spectral
+    decomposition of a 4096 x 4096 matrix per image costs O(n^3); on 2000
+    images that is out of the question (and Sigma would have to be formed,
+    which the whole project forbids itself).
 
-    On prend le filtre de Wiener, qui a la même intention — atténuer ce qui
-    n'est pas dans les directions dominantes de Sigma — et qui se simplifie
-    remarquablement :
+    We take the Wiener filter, which has the same intent — attenuate whatever
+    does not lie in the dominant directions of Sigma — and which simplifies
+    remarkably:
 
         f(s) = Sigma (Sigma + tau I)^-1 s = (I + tau Lambda)^-1 s
 
-    Il n'y a plus de Sigma du tout, seulement la PRÉCISION, que le réseau
-    prédit directement. Le système est symétrique défini positif : gradient
-    conjugué, chaque produit `Lambda v = L (L^T v)` coûtant O(n*m). Aucune
-    matrice n x n n'est formée, aucune valeur propre n'est calculée.
+    There is no Sigma left at all, only the PRECISION, which the network
+    predicts directly. The system is symmetric positive definite: conjugate
+    gradient, each product `Lambda v = L (L^T v)` costing O(n*m). No n x n
+    matrix is ever formed, no eigenvalue is ever computed.
 
-    Mieux : tau n'est pas un réglage arbitraire. Si l'on modélise s = r + bruit
-    avec r ~ N(0, Sigma) et un bruit de variance sigma^2 indépendant, alors
+    Better still: tau is not an arbitrary knob. If one models s = r + noise
+    with r ~ N(0, Sigma) and independent noise of variance sigma^2, then
 
         E[r | s] = Sigma (Sigma + sigma^2 I)^-1 s
 
-    c'est-à-dire EXACTEMENT ce filtre avec tau = sigma^2. Le meilleur tau
-    trouvé empiriquement se lit donc comme un diagnostic : proche de sigma^2,
-    la covariance prédite est à la bonne échelle ; beaucoup plus grand, le
-    modèle est trop confiant et il faut le brider. (L'indépendance entre r et
-    le bruit est fausse en toute rigueur — r dépend de y, donc du bruit — mais
-    c'est une approximation raisonnable, et le balayage de tau la corrige.)
+    that is to say EXACTLY this filter with tau = sigma^2. The best tau found
+    empirically therefore reads as a diagnostic: close to sigma^2, the
+    predicted covariance is at the right scale; much larger, the model is
+    overconfident and has to be reined in. (The independence between r and the
+    noise is strictly speaking false — r depends on y, hence on the noise —
+    but it is a reasonable approximation, and the tau sweep corrects for it.)
 
-CE QUE VAUT LA COMPARAISON
-    Quand tau tend vers l'infini, f(s) tend vers 0 et l'on retombe exactement
-    sur le DnCNN seul. La référence est donc un CAS LIMITE de la méthode : un
-    tau choisi sur un jeu de validation ne peut pas faire pire, et tout gain
-    mesuré est réel.
+WHAT THE COMPARISON IS WORTH
+    When tau tends to infinity, f(s) tends to 0 and we fall back exactly on
+    the DnCNN alone. The baseline is therefore a LIMITING CASE of the method:
+    a tau chosen on a validation set cannot do worse, and any measured gain is
+    real.
 
-ET POURQUOI CE GAIN SERA QUASI NUL — à lire avant de s'en étonner
-    Le DnCNN est entraîné en MSE, et le minimiseur de la MSE est la MOYENNE
-    CONDITIONNELLE : à l'optimum, mu(y) = E[x | y], donc E[r | y] = 0. Or
-    s = y - mu(y) est une fonction déterministe de y. Pour toute correction
-    additive g(y) :
+AND WHY THAT GAIN WILL BE ALL BUT ZERO — read this before being surprised
+    The DnCNN is trained in MSE, and the minimiser of the MSE is the
+    CONDITIONAL MEAN: at the optimum, mu(y) = E[x | y], hence E[r | y] = 0.
+    But s = y - mu(y) is a deterministic function of y. For any additive
+    correction g(y):
 
         E||x - mu - g||^2 = E||r||^2 - 2 E[r . g(y)] + E||g||^2
                           = E||r||^2 + E||g||^2   >=  E||r||^2
 
-    puisque E[r . g(y)] = E[ E[r|y] . g(y) ] = 0. AUCUNE correction calculée à
-    partir de y ne peut réduire la MSE d'un débruiteur MSE-optimal, et la
-    meilleure est g = 0. Le gain mesuré ici ne dit donc rien de la qualité de
-    la covariance : il mesure L'ÉCART DU DnCNN À L'OPTIMUM, ce qui reste un
-    résultat en soi.
+    since E[r . g(y)] = E[ E[r|y] . g(y) ] = 0. NO correction computed from y
+    can reduce the MSE of an MSE-optimal denoiser, and the best one is g = 0.
+    The gain measured here therefore says nothing about the quality of the
+    covariance: it measures THE DnCNN'S DISTANCE FROM THE OPTIMUM, which is
+    still a result in itself.
 
-    L'article n'a pas ce problème : son mu vient d'un VAE qui n'a JAMAIS vu de
-    bruit, donc très loin de E[x|y], d'où les 40 % de la Table 4. Notre
-    variante remplace ce VAE par un vrai débruiteur, et c'est exactement ce qui
-    rend le §5.3 structurellement ingrat ici.
+    The paper does not have this problem: its mu comes from a VAE that has
+    NEVER seen noise, hence one very far from E[x|y], which is where the 40 %
+    of Table 4 come from. Our variant replaces that VAE with a genuine
+    denoiser, and that is exactly what makes §5.3 structurally thankless here.
 
-    Ce que la covariance apporte est ailleurs, et ne se mesure pas en MSE : mu
-    est flou parce qu'une moyenne conditionnelle est floue, et mu + eps
-    échantillonné est net. C'est le compromis perception / distorsion, et c'est
-    l'objet de la figure de eval_cov.py, pas de ce tableau.
+    What the covariance brings lies elsewhere, and is not measured in MSE: mu
+    is blurry because a conditional mean is blurry, and mu + sampled eps is
+    sharp. That is the perception / distortion trade-off, and it is the
+    subject of the eval_cov.py figure, not of this table.
 
-Sorties :
+Outputs:
     results/denoise.json
     results/denoise.png
 """
@@ -93,8 +94,8 @@ import matplotlib.pyplot as plt
 
 from data import CelebADataset
 from loss import IMAGE_SIZE, VOISINAGE, build_neighbor_indices
-# Même raison que dans train_cov.py et eval_cov.py : ces briques posent ici le
-# même problème qu'ailleurs, autant les importer que les recopier.
+# Same reason as in train_cov.py and eval_cov.py: these building blocks pose
+# the same problem here as elsewhere, so importing them beats copying them.
 from eval_cov import appliquer_lambda, charger_cov
 from train_cov import charger_dncnn
 from train_dncnn import construire_validation, psnr
@@ -103,22 +104,22 @@ DOSSIER_RES = "results"
 
 
 # --------------------------------------------------------------------------
-# Solveur
+# Solver
 # --------------------------------------------------------------------------
 @torch.no_grad()
 def gradient_conjugue(matvec, b, iterations=60, tol=1e-6):
     """
-    Résout `A f = b` pour A symétrique définie positive, sans former A.
+    Solves `A f = b` for A symmetric positive definite, without forming A.
 
-    A n'est connue que par son action `matvec`. C'est toute la raison d'être du
-    gradient conjugué ici : notre A vaut `I + tau * L L^T`, dont le produit
-    par un vecteur coûte O(n*m) alors que la matrice pèserait 67 Mo.
+    A is known only through its action `matvec`. That is the whole reason
+    conjugate gradient is used here: our A is `I + tau * L L^T`, whose product
+    with a vector costs O(n*m) whereas the matrix itself would weigh 67 MB.
 
-    Tout est vectorisé sur le batch : chaque image a son propre système, ses
-    propres coefficients alpha et beta, et le critère d'arrêt porte sur la PIRE
-    image du lot.
+    Everything is vectorised over the batch: each image has its own system,
+    its own alpha and beta coefficients, and the stopping criterion bears on
+    the WORST image of the batch.
 
-    Retour : (f, résidu relatif maximal, nombre d'itérations effectuées).
+    Returns: (f, maximum relative residual, number of iterations performed).
     """
     f = torch.zeros_like(b)
     reste = b.clone()
@@ -145,10 +146,10 @@ def gradient_conjugue(matvec, b, iterations=60, tol=1e-6):
 @torch.no_grad()
 def projeter(cov_net, mu, s, tau, neighbor_idx, mask, iterations, tol):
     """
-    f(s) = (I + tau * Lambda)^-1 s, pour un lot d'images.
+    f(s) = (I + tau * Lambda)^-1 s, for a batch of images.
 
-    `cov_net` est appelé UNE fois par lot : les 25 x 4096 coefficients prédits
-    servent aux 60 itérations du gradient conjugué.
+    `cov_net` is called ONCE per batch: the 25 x 4096 predicted coefficients
+    serve the 60 iterations of the conjugate gradient.
     """
     log_diag, offdiag = cov_net(mu)
 
@@ -163,11 +164,11 @@ def projeter(cov_net, mu, s, tau, neighbor_idx, mask, iterations, tol):
 def mse_par_image(cov_net, dncnn, x, y, tau, batch, neighbor_idx, mask,
                   iterations, tol, garder=0):
     """
-    MSE de `mu + f(s)` contre `x`, image par image, en unités [-1, 1].
+    MSE of `mu + f(s)` against `x`, image by image, in [-1, 1] units.
 
-    Renvoie aussi la MSE du DnCNN seul — mesurée sur les MÊMES images et le
-    MÊME bruit, sans quoi la comparaison ne voudrait rien dire — et, si
-    `garder > 0`, les `garder` premières images reconstruites pour la figure.
+    Also returns the MSE of the DnCNN alone — measured on the SAME images and
+    the SAME noise, without which the comparison would mean nothing — and, if
+    `garder > 0`, the first `garder` reconstructed images for the figure.
     """
     mses, mses_dncnn, images = [], [], []
     gardees, reste_relatif, iterations_faites = 0, 0.0, 0
@@ -208,7 +209,7 @@ def mse_par_image(cov_net, dncnn, x, y, tau, batch, neighbor_idx, mask,
 # Figure
 # --------------------------------------------------------------------------
 def figure_denoise(x, y, mu, colonnes, chemin):
-    """x | y | mu | mu + f(s) pour chaque modèle disponible."""
+    """x | y | mu | mu + f(s) for each available model."""
     toutes = [("x  (propre)", x), ("y  (bruitée)", y),
               ("mu = DnCNN(y)", mu)] + colonnes
     n_lignes, n_col = x.shape[0], len(toutes)
@@ -227,15 +228,15 @@ def figure_denoise(x, y, mu, colonnes, chemin):
 
 
 # --------------------------------------------------------------------------
-# Auto-test (--verif)
+# Self-test (--verif)
 # --------------------------------------------------------------------------
 def verifications():
     """
-    Le gradient conjugué contre une résolution dense, en 16x16.
+    The conjugate gradient against a dense solve, in 16x16.
 
-    C'est le seul endroit du projet où l'on peut confronter le solveur à la
-    vérité : à n = 256 la matrice `I + tau L L^T` tient dans 262 ko et
-    `torch.linalg.solve` donne la réponse exacte.
+    This is the only place in the project where the solver can be confronted
+    with the truth: at n = 256 the matrix `I + tau L L^T` fits in 262 kB and
+    `torch.linalg.solve` gives the exact answer.
     """
     from loss import build_L_dense
 
@@ -245,7 +246,7 @@ def verifications():
     neighbor_idx, mask = build_neighbor_indices(S, VOISINAGE)
     m = neighbor_idx.shape[1]
 
-    log_diag = 2.0 + 0.3 * torch.randn(B, n)      # diagonale ~ exp(2.66)
+    log_diag = 2.0 + 0.3 * torch.randn(B, n)      # diagonal ~ exp(2.66)
     offdiag = 0.5 * torch.randn(B, n, m)
     s = torch.randn(B, n)
 
@@ -268,7 +269,7 @@ def verifications():
               % (nb, err.item(), res))
     assert err < 1e-4, "le gradient conjugué ne converge pas vers la solution"
 
-    # Les deux cas limites du filtre, qui doivent tomber juste sans calcul.
+    # The filter's two limiting cases, which must be exact with no computation.
     f0, _, _ = gradient_conjugue(lambda v: v + 0.0 * v, s, 5, 1e-12)
     assert (f0 - s).abs().max() < 1e-5, "tau = 0 doit rendre s inchangé"
     print("tau = 0 : f(s) = s               OK")
@@ -335,10 +336,10 @@ def main():
     print("sigma = %.4f  ->  tau théorique (= sigma^2) = %.5f"
           % (sigma, tau_theorique))
 
-    # ---- choix de tau, sur des images qui ne sont PAS le jeu de test ------
-    # On prend la fin du split d'entraînement : ce sont les images que
-    # train_cov.py a retirées du gradient pour sa courbe de validation. Régler
-    # tau sur le jeu de test ferait du chiffre final une mesure truquée.
+    # ---- choosing tau, on images that are NOT the test set ---------------
+    # We take the tail of the training split: these are the images that
+    # train_cov.py removed from the gradient for its validation curve. Tuning
+    # tau on the test set would make the final figure a rigged measurement.
     taus = {}
     if args.tau > 0:
         for nom in modeles:
@@ -349,8 +350,8 @@ def main():
         idx_val = list(range(len(jeu_val) - args.n_val, len(jeu_val)))
         xv, yv = construire_validation(jeu_val, idx_val, sigma,
                                        args.graine + 3, appareil)
-        # Grille logarithmique centrée sur la valeur théorique : 13 points
-        # symétriques, donc sigma^2 en fait exactement partie.
+        # Logarithmic grid centred on the theoretical value: 13 symmetric
+        # points, so sigma^2 is exactly one of them.
         grille = tau_theorique * np.logspace(-1.5, 1.5, 13)
         print()
         print("balayage de tau sur %d images de validation" % args.n_val)
@@ -368,8 +369,8 @@ def main():
                              "mse": scores, "tau": float(grille[k])}
             print("  %-10s tau* = %.5f  (%.2f x sigma^2)  MSE %.3e"
                   % (nom, grille[k], grille[k] / tau_theorique, scores[k]))
-            # Les deux bords ne disent pas la même chose, et confondre les
-            # deux ferait passer un aveu d'échec pour un réglage à affiner.
+            # The two edges do not say the same thing, and conflating them
+            # would pass an admission of failure off as a knob to fine-tune.
             if k == 0:
                 print("    /!\\ optimum au bord BAS : f(s) tend vers s, donc")
                 print("        mu + f(s) tend vers y. Le filtre préfère "
@@ -384,7 +385,7 @@ def main():
                       "Résultat négatif, à dire tel quel.")
         del xv, yv
 
-    # ---- évaluation sur le jeu de test -----------------------------------
+    # ---- evaluation on the test set --------------------------------------
     n_test = len(jeu_test) if args.n == 0 else min(args.n, len(jeu_test))
     x, y = construire_validation(jeu_test, list(range(n_test)), sigma,
                                  args.graine, appareil)
@@ -402,9 +403,9 @@ def main():
         resultats[nom] = {
             "tau": taus[nom],
             "tau_sur_sigma2": taus[nom] / tau_theorique,
-            # Les images vivent dans [-1, 1] ; la littérature (et la Table 4 de
-            # l'article) compte en [0, 1], soit une MSE quatre fois plus
-            # petite. On donne les deux pour éviter tout malentendu.
+            # Images live in [-1, 1]; the literature (and Table 4 of the
+            # paper) counts in [0, 1], i.e. an MSE four times smaller. Both
+            # are given to rule out any misunderstanding.
             "mse_pm1": float(mse.mean()),
             "mse_01": float(mse.mean()) / 4.0,
             "mse_01_ecart_type": float(mse.std()) / 4.0,
@@ -430,7 +431,7 @@ def main():
                    dncnn(y[:args.figures]).detach()[:, 0].cpu().numpy(),
                    colonnes, os.path.join(DOSSIER_RES, "denoise.png"))
 
-    # ---- résumé ----------------------------------------------------------
+    # ---- summary ---------------------------------------------------------
     print()
     print("=" * 76)
     print("%-22s %14s %10s %12s" % ("méthode", "MSE [0,1]", "PSNR dB",
@@ -465,7 +466,7 @@ def main():
                   % gain)
             print("  l'écart du DnCNN à l'optimum, pas la qualité de Sigma.")
             print("  Voir le docstring de ce fichier et la section 7 de")
-            print("  tuteur.txt avant d'y voir un échec.")
+            print("  docs/tuteur.txt avant d'y voir un échec.")
 
     sortie = {
         "n_images": n_test,

@@ -1049,6 +1049,15 @@ GPU OCCUPE, ET UNE CHAINE DE JOBS QUI SE VIDE  (rencontre le 27 aout)
   et scontrol requeue si le GPU est inutilisable. Le job garde son JobID, donc
   la chaine derriere lui survit, et il repart sur un autre noeud.
 
+  UN GARDE-FOU NE PROTEGE QUE LE SCRIPT OU IL EST ECRIT. Le 27 aout a 09 h 27,
+  la MEME panne a tue evaluation.bash en huit secondes sur node023, cette fois
+  dans le torch.load du DnCNN. Le correctif avait ete ecrit dans
+  train_cov.bash et nulle part ailleurs. Le test CUDA et le requeue ont donc
+  ete recopies dans evaluation.bash, qui a recu aussi le #SBATCH --requeue
+  sans lequel scontrol requeue n'a rien a remettre en file.
+  Contournement immediat, sans modifier de fichier :
+      sbatch --exclude=node031,node032,node023 evaluation.bash
+
   ET UN SECOND PIEGE, CACHE DERRIERE LE PREMIER. sacct affichait COMPLETED
   pour ces six jobs morts en huit secondes. Raison : le script sbatch se
   terminait par un echo et un date, dont le code de sortie 0 ecrasait celui de

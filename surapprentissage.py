@@ -1,21 +1,23 @@
 """
-Test de surapprentissage volontaire — critère d'arrêt de la phase 4.
+Deliberate overfitting test — stopping criterion of phase 4.
 
-On prend 8 images, on fige le bruit, on calcule le résidu `r = x - DnCNN(y)`
-UNE FOIS, et on entraîne le réseau de covariance sur ces 8 résidus et rien
-d'autre. Avec 518 681 paramètres pour 8 exemples, la NLL doit s'effondrer.
+We take 8 images, we freeze the noise, we compute the residual
+`r = x - DnCNN(y)` ONCE, and we train the covariance network on those 8
+residuals and nothing else. With 518 681 parameters for 8 examples, the NLL
+must collapse.
 
-    Si elle ne descend pas sur 8 images, le problème est dans le code, pas dans
-    les données.
+    If it does not go down on 8 images, the problem is in the code, not in
+    the data.
 
-C'est le seul test qui vérifie loss.py et cov_model.py ENSEMBLE, et il coûte
-deux minutes contre cinq heures pour un vrai entraînement.
+This is the only test that checks loss.py and cov_model.py TOGETHER, and it
+costs two minutes against five hours for a real training run.
 
-Le même test tourne pour le modèle structuré et pour la référence diagonale.
-L'écart entre les deux est une première mesure, sur 8 images, de ce que la
-structure apporte — la vraie mesure viendra de eval_cov.py sur le jeu de test.
+The same test runs for the structured model and for the diagonal baseline.
+The gap between the two is a first measure, on 8 images, of what the
+structure brings — the real measure will come from eval_cov.py on the test
+set.
 
-Usage :
+Usage:
     python surapprentissage.py --checkpoint checkpoints/dncnn_best.pt
 """
 
@@ -31,7 +33,7 @@ from loss import build_neighbor_indices, apply_LT, structured_gaussian_nll
 
 
 def charger_dncnn(chemin, appareil):
-    """Charge le débruiteur entraîné, le passe en eval et GÈLE ses poids."""
+    """Load the trained denoiser, switch it to eval and FREEZE its weights."""
     etat = torch.load(chemin, map_location=appareil, weights_only=False)
     modele = DnCNN().to(appareil)
     modele.load_state_dict(etat["modele"])
@@ -44,9 +46,9 @@ def charger_dncnn(chemin, appareil):
 def surapprendre(residu, mu, neighbor_idx, mask, diagonale_seule,
                  iterations, lr, appareil, etiquette):
     """
-    Entraîne un réseau de covariance neuf sur un lot FIXE de résidus.
+    Train a brand-new covariance network on a FIXED batch of residuals.
 
-    Renvoie (nll_initiale, nll_finale, variance de w = L^T r).
+    Returns (initial NLL, final NLL, variance of w = L^T r).
     """
     reseau = SparseCholeskyNet(diagonale_seule=diagonale_seule).to(appareil)
     opt = torch.optim.Adam(reseau.parameters(), lr=lr)
@@ -67,14 +69,14 @@ def surapprendre(residu, mu, neighbor_idx, mask, diagonale_seule,
             print("    %-12s iter %5d   NLL/pixel %+8.4f"
                   % (etiquette, it, nll.item() / n))
 
-    # Variance de w = L^T r, à titre indicatif SEULEMENT.
+    # Variance of w = L^T r, for information ONLY.
     #
-    # Sur données tenues à l'écart, w doit suivre N(0, I) et sa variance vaut
-    # 1 : c'est le test de calibration de eval_cov.py. ICI, PAS DU TOUT. Sur
-    # 8 résidus figés, 518 681 paramètres peuvent faire tendre la précision
-    # vers l'infini et la NLL vers moins l'infini : la variance de w s'effondre
-    # bien en dessous de 1, et c'est la PREUVE que le surapprentissage marche.
-    # Ne pas lire ce chiffre comme un défaut de calibration.
+    # On held-out data, w must follow N(0, I) and its variance is 1: that is
+    # the calibration test of eval_cov.py. HERE, NOT AT ALL. On 8 frozen
+    # residuals, 518 681 parameters can drive the precision towards infinity
+    # and the NLL towards minus infinity: the variance of w collapses well
+    # below 1, and that is the PROOF that the overfitting works. Do not read
+    # this figure as a calibration flaw.
     with torch.no_grad():
         log_diag, offdiag = reseau(mu)
         w = apply_LT(log_diag, offdiag, residu, neighbor_idx, mask)
@@ -96,10 +98,10 @@ def main():
     appareil = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.graine)
 
-    # Sur le nœud de connexion du cluster il n'y a pas de GPU : torch bascule
-    # silencieusement sur le CPU et le test met un quart d'heure au lieu de
-    # deux minutes. Autant le dire tout de suite plutôt que de laisser
-    # attendre devant un écran muet.
+    # On the login node of the cluster there is no GPU: torch silently falls
+    # back to the CPU and the test takes a quarter of an hour instead of two
+    # minutes. Better to say so straight away than to leave someone waiting
+    # in front of a silent screen.
     if appareil.type == "cpu":
         print("/!\\ aucun GPU visible : exécution sur CPU, comptez ~15 min.")
         print("    Sur le cluster, cela signifie que vous êtes resté sur le")
@@ -110,11 +112,11 @@ def main():
     dncnn, epoch = charger_dncnn(args.checkpoint, appareil)
     print("DnCNN chargé : %s (epoch %d), gelé." % (args.checkpoint, epoch))
 
-    # --- le lot, avec un bruit tiré UNE SEULE FOIS ------------------------
-    # Point crucial. CelebADataset retire le bruit à chaque accès, ce qui est
-    # exactement ce qu'on veut à l'entraînement et exactement ce qu'on ne veut
-    # PAS ici : si r changeait à chaque itération, il n'y aurait rien à
-    # mémoriser et le test ne prouverait rien.
+    # --- the batch, with the noise drawn ONLY ONCE ------------------------
+    # Crucial point. CelebADataset redraws the noise on every access, which is
+    # exactly what we want during training and exactly what we do NOT want
+    # here: if r changed at every iteration, there would be nothing to
+    # memorise and the test would prove nothing.
     jeu = CelebADataset(split=args.split)
     lot = [jeu[i] for i in range(args.n)]
     x = torch.stack([e["x"] for e in lot]).to(appareil)
@@ -130,8 +132,8 @@ def main():
     print("résidu sur ces %d images : écart-type %.4f" % (args.n, std_r))
     print("  -> init_log_diag idéal pour ce lot : %.4f" % (-math.log(std_r)))
 
-    # Plancher de référence : la meilleure gaussienne ISOTROPE possible sur ce
-    # résidu. Tout modèle qui ne fait pas mieux que ça n'a rien appris.
+    # Reference floor: the best possible ISOTROPIC Gaussian on this residual.
+    # Any model that does not do better than that has learned nothing.
     nll_isotrope = 0.5 * (1.0 + math.log(2.0 * math.pi * std_r ** 2))
     print("  -> NLL/pixel d'une gaussienne isotrope ajustée : %+.4f"
           % nll_isotrope)

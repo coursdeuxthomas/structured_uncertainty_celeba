@@ -7,9 +7,9 @@
 #SBATCH --mem=8G
 #SBATCH --output=logs/celeba_data_%j.out
 #
-# Construit le cache CelebA 64x64 gris. Pas de GPU demandé : c'est du
-# décodage JPEG, purement CPU, et un job sans GPU passe beaucoup plus vite
-# dans la file.
+# Builds the 64x64 grayscale CelebA cache. No GPU requested: this is JPEG
+# decoding, purely CPU work, and a job without a GPU gets through the queue
+# much faster.
 #
 #   mkdir -p logs
 #   sbatch build_data.bash
@@ -21,9 +21,9 @@ date
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate dncnn
 
-cd ~/structured_uncertainty_celeba     # adapte si tu as cloné ailleurs
+cd ~/structured_uncertainty_celeba     # adjust if you cloned elsewhere
 
-# Où sont les JPEG, où va le cache (830 Mo).
+# Where the JPEGs are, where the cache goes (830 MB).
 export CELEBA_DIR=$HOME/data/celeba/img_align_celeba
 export CELEBA_CACHE=$HOME/data/celeba/celeba_64_gray.npy
 
@@ -34,9 +34,9 @@ echo "Images trouvées :"
 find "$CELEBA_DIR" -name '*.jpg' | wc -l
 echo "(202599 attendu)"
 
-# --build construit le cache PUIS enchaîne sur les vérifications et écrit
-# results/data_preview.png : un seul appel suffit.
-python -u data.py --build  # ~10 à 20 min, une seule fois (-u : log en direct)
+# --build builds the cache AND THEN goes on to the checks and writes
+# results/data_preview.png: a single call is enough.
+python -u data.py --build  # ~10 to 20 min, once only (-u: live log)
 
 echo "Job finished:"
 date

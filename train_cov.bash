@@ -10,22 +10,22 @@
 #SBATCH --output=logs/cov_%j.out
 #SBATCH --requeue
 #
-# Entrainement du reseau de covariance, DnCNN gele.
+# Training of the covariance network, with the DnCNN frozen.
 #
-#   sbatch train_cov.bash                 modele structure
-#   sbatch train_cov.bash --diagonale     reference diagonale
+#   sbatch train_cov.bash                 structured model
+#   sbatch train_cov.bash --diagonale     diagonal baseline
 #
-# LES DEUX RUNS SONT NECESSAIRES. L'ecart de NLL entre eux est ce qui chiffre
-# l'apport de la structure ; sans lui les resultats ne demontrent rien. Ils
-# ecrivent sous des noms distincts (cov_* et covdiag_*), donc ils peuvent
-# tourner l'un apres l'autre ou en parallele sans se marcher dessus.
+# BOTH RUNS ARE REQUIRED. The NLL gap between them is what puts a number on
+# what the structure brings; without it the results prove nothing. They
+# write under distinct names (cov_* and covdiag_*), so they can run one
+# after the other or in parallel without stepping on each other.
 #
-# --resume est deja dans la ligne de commande ci-dessous : relancer ce meme
-# script apres la coupure des 1 h 55 poursuit l'entrainement la ou il s'est
-# arrete. Comptez plusieurs relances pour aller au bout des 50 epochs.
+# --resume is already on the command line below: relaunching this same
+# script after the 1 h 55 cutoff carries on training where it left off.
+# Count on several relaunches to get all the way through the 50 epochs.
 #
-# node031 et node032 sont exclus pour la meme raison que dans
-# train_dncnn.bash : sm_61, incompatible avec le torch de l'env dncnn.
+# node031 and node032 are excluded for the same reason as in
+# train_dncnn.bash: sm_61, incompatible with the torch of the dncnn env.
 
 echo "Job started on:"
 hostname
@@ -40,22 +40,22 @@ export CELEBA_DIR=$HOME/data/celeba/img_align_celeba
 export CELEBA_CACHE=$HOME/data/celeba/celeba_64_gray.npy
 
 # --------------------------------------------------------------------------
-# GARDE-FOU GPU, ajoute le 27 aout apres un echec en trois secondes.
+# GPU GUARD, added on 27 August after a failure that took three seconds.
 #
-# Sur ce cluster, un GPU deja pris par un autre processus (mode de calcul
-# exclusif) laisse torch.cuda.is_available() repondre True et affiche meme le
-# nom de la carte : ces appels ne creent pas de contexte CUDA. C'est la
-# PREMIERE allocation qui echoue, avec
+# On this cluster, a GPU already taken by another process (exclusive compute
+# mode) still lets torch.cuda.is_available() answer True and even displays
+# the name of the card: those calls do not create a CUDA context. It is the
+# FIRST allocation that fails, with
 #     CUDA error: CUDA-capable device(s) is/are busy or unavailable
 #
-# Sans ce test, le job meurt en trois secondes et l'echec se propage
-# instantanement a toute la chaine --dependency=afterany : six jobs disparus
-# en vingt secondes. On remet plutot le job en file d'attente. Il GARDE SON
-# JOBID, donc la chaine derriere lui reste intacte, et il repartira sur un
-# autre noeud.
+# Without this test, the job dies in three seconds and the failure spreads
+# instantly to the whole --dependency=afterany chain: six jobs gone in twenty
+# seconds. Instead, we put the job back in the queue. It KEEPS ITS JOBID, so
+# the chain behind it stays intact, and it will start again on another
+# node.
 #
-# Le compteur SLURM_RESTART_COUNT evite la boucle infinie si le probleme n'est
-# pas un noeud isole mais une limite de compte.
+# The SLURM_RESTART_COUNT counter avoids the infinite loop if the problem is
+# not an isolated node but an account limit.
 # --------------------------------------------------------------------------
 if ! python -c "import torch; torch.zeros(1, device='cuda')" 2>/dev/null; then
   echo "GPU inutilisable sur $(hostname) : deja occupe, ou mode exclusif."
@@ -70,15 +70,15 @@ if ! python -c "import torch; torch.zeros(1, device='cuda')" 2>/dev/null; then
 fi
 echo "GPU utilisable, demarrage."
 
-# -u : sortie non tamponnee, sinon le log reste vide plusieurs minutes.
+# -u : unbuffered output, otherwise the log stays empty for several minutes.
 python -u train_cov.py --epochs 50 --resume "$@"
 code=$?
 
-# Le code de sortie de python doit remonter a SLURM. Sans le "exit $code"
-# ci-dessous, le dernier "date" reussit et le job est enregistre COMPLETED
-# meme si l'entrainement a plante : sacct affiche alors des succes partout et
-# on cherche la panne ailleurs. C'est exactement ce qui s'est passe le
-# 27 aout avec les six jobs diagonaux morts en huit secondes.
+# Python's exit code has to make it back up to SLURM. Without the "exit $code"
+# below, the last "date" succeeds and the job is recorded as COMPLETED even
+# if the training crashed: sacct then shows successes everywhere and you go
+# hunting for the failure somewhere else. That is exactly what happened on
+# 27 August with the six diagonal jobs that died in eight seconds.
 echo "Job finished:"
 date
 exit $code

@@ -9,19 +9,19 @@
 #SBATCH --exclude=node031,node032
 #SBATCH --output=logs/surapp_%j.out
 #
-# Test de surapprentissage volontaire : le critere d'arret de la phase 4.
-# Il verifie loss.py et cov_model.py ENSEMBLE, et dure environ deux minutes.
+# Deliberate overfitting test: the stopping criterion of phase 4.
+# It checks loss.py and cov_model.py TOGETHER, and takes about two minutes.
 #
-# EN DIRECT DANS LE TERMINAL (recommande, une seule ligne a taper) :
+# LIVE IN THE TERMINAL (recommended, a single line to type):
 #   srun --partition=short --time=00:20:00 --cpus-per-task=4 --mem=16G --gres=gpu:1 --exclude=node031,node032 bash surapprentissage.bash
 #
-# EN DIFFERE, la sortie va dans logs/surapp_<jobid>.out :
-#   mkdir -p logs        <- une seule fois, si ce n'est pas deja fait
+# DEFERRED, the output goes to logs/surapp_<jobid>.out:
+#   mkdir -p logs        <- once only, if not already done
 #   sbatch surapprentissage.bash
 #
-# node031 et node032 sont exclus pour la meme raison que dans
-# train_dncnn.bash : ils sont en sm_61 et le torch de l'env dncnn echoue des
-# la premiere operation CUDA.
+# node031 and node032 are excluded for the same reason as in
+# train_dncnn.bash: they are sm_61 and the torch of the dncnn env fails on
+# the very first CUDA operation.
 
 echo "Job started on:"
 hostname
@@ -35,8 +35,8 @@ cd ~/structured_uncertainty_celeba
 export CELEBA_DIR=$HOME/data/celeba/img_align_celeba
 export CELEBA_CACHE=$HOME/data/celeba/celeba_64_gray.npy
 
-# -u : sortie non tamponnee, pour que le log se remplisse en direct quand on
-# passe par sbatch. Meme raison que dans train_dncnn.bash.
+# -u : unbuffered output, so that the log fills up live when going through
+# sbatch. Same reason as in train_dncnn.bash.
 python -u surapprentissage.py --checkpoint checkpoints/dncnn_best.pt "$@"
 
 echo "Job finished:"

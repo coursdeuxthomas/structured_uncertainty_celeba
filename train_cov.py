@@ -1,29 +1,29 @@
 """
-Entraînement du réseau de covariance (étape 2 du projet).
+Training of the covariance network (step 2 of the project).
 
-    python train_cov.py --epochs 50 --resume                # modèle structuré
-    python train_cov.py --epochs 50 --resume --diagonale    # référence
+    python train_cov.py --epochs 50 --resume                # structured model
+    python train_cov.py --epochs 50 --resume --diagonale    # reference
 
-Entraînement EN DEUX TEMPS, comme dans l'article (Eq. 4, « keeping the
-generative model parameters theta fixed ») : le DnCNN est chargé, mis en
-eval() et GELÉ. Seul le réseau de covariance apprend.
+TWO-STAGE training, as in the paper (Eq. 4, "keeping the generative model
+parameters theta fixed"): the DnCNN is loaded, switched to eval() and FROZEN.
+Only the covariance network learns.
 
     y  = x + sigma * randn
-    mu = dncnn(y)                     <- sous torch.no_grad()
+    mu = dncnn(y)                     <- under torch.no_grad()
     r  = x - mu
     log_diag, offdiag = cov_net(mu)
     loss = structured_gaussian_nll(log_diag, offdiag, r, neighbor_idx, mask)
 
-DEUX RUNS SONT NÉCESSAIRES, pas un.  `--diagonale` réentraîne le même réseau
-avec offdiag forcé à zéro : c'est la référence hétéroscédastique classique, et
-l'écart de NLL entre les deux runs est ce qui chiffre l'apport de la structure.
-Sans elle les résultats ne démontrent rien (§6.2 de tuteur.txt). Les deux runs
-écrivent sous des noms distincts, ils ne s'écrasent pas.
+TWO RUNS ARE NEEDED, not one.  `--diagonale` retrains the same network with
+offdiag forced to zero: this is the classical heteroscedastic reference, and
+the NLL gap between the two runs is what quantifies what the structure adds.
+Without it the results demonstrate nothing (§6.2 of docs/tuteur.txt). The two
+runs write under distinct names, they do not overwrite each other.
 
-Sorties (prefixe = cov, ou covdiag avec --diagonale) :
-    checkpoints/<prefixe>_last.pt     état complet, réécrit à chaque epoch
-    checkpoints/<prefixe>_best.pt     meilleure NLL de validation
-    results/history_<prefixe>.json    courbes, réécrites à chaque epoch
+Outputs (prefixe = cov, or covdiag with --diagonale):
+    checkpoints/<prefixe>_last.pt     full state, rewritten at each epoch
+    checkpoints/<prefixe>_best.pt     best validation NLL
+    results/history_<prefixe>.json    curves, rewritten at each epoch
 """
 
 import argparse
@@ -41,10 +41,10 @@ from data import CelebADataset, SIGMA
 from dncnn import DnCNN
 from loss import build_neighbor_indices, structured_gaussian_nll
 
-# Repris de train_dncnn.py plutôt que recopiés : sauvegarde atomique, garde
-# SLURM, chargement tolérant des checkpoints et jeu de validation à bruit figé
-# posent exactement les mêmes problèmes ici. Un correctif appliqué là-bas
-# profite automatiquement à ce script.
+# Reused from train_dncnn.py rather than copied over: atomic saving, the
+# SLURM guard, tolerant checkpoint loading and the frozen-noise validation
+# set raise exactly the same problems here. A fix applied over there
+# automatically benefits this script.
 from train_dncnn import (charger_checkpoint, construire_validation,
                          sauvegarde_atomique, verifier_noeud_de_calcul)
 
@@ -53,14 +53,14 @@ DOSSIER_RES = "results"
 
 
 def charger_dncnn(chemin, appareil):
-    """Charge le débruiteur, le passe en eval() et GÈLE ses poids."""
+    """Load the denoiser, switch it to eval() and FREEZE its weights."""
     etat = charger_checkpoint(chemin, appareil)
     modele = DnCNN().to(appareil)
     modele.load_state_dict(etat["modele"])
     modele.eval()
-    # requires_grad_(False) en plus du no_grad() de la boucle : le no_grad
-    # empêche de construire le graphe, ceci empêche l'optimiseur de toucher
-    # aux poids même si on se trompait un jour en le construisant.
+    # requires_grad_(False) on top of the loop's no_grad(): no_grad prevents
+    # the graph from being built, this prevents the optimiser from touching
+    # the weights even if one day we made a mistake while building it.
     for p in modele.parameters():
         p.requires_grad_(False)
     return modele, etat.get("epoch", -1)
@@ -69,11 +69,11 @@ def charger_dncnn(chemin, appareil):
 @torch.no_grad()
 def preparer_validation(dncnn, x_val, y_val, batch):
     """
-    Calcule mu et r sur la validation UNE SEULE FOIS.
+    Compute mu and r on the validation set ONLY ONCE.
 
-    Le DnCNN est gelé et le bruit de validation est figé : mu ne changera
-    jamais. Le recalculer à chaque epoch serait du temps GPU jeté, et la
-    courbe de validation doit de toute façon être exactement reproductible.
+    The DnCNN is frozen and the validation noise is fixed: mu will never
+    change. Recomputing it at every epoch would be GPU time thrown away, and
+    the validation curve must in any case be exactly reproducible.
     """
     mus = []
     for debut in range(0, len(x_val), batch):
@@ -85,7 +85,7 @@ def preparer_validation(dncnn, x_val, y_val, batch):
 
 @torch.no_grad()
 def evaluer(cov_net, mu_val, r_val, batch, neighbor_idx, mask):
-    """NLL moyenne par image sur la validation."""
+    """Mean NLL per image on the validation set."""
     cov_net.eval()
     total, n = 0.0, 0
     for debut in range(0, len(mu_val), batch):
@@ -126,8 +126,8 @@ def main():
     os.makedirs(DOSSIER_CKPT, exist_ok=True)
     os.makedirs(DOSSIER_RES, exist_ok=True)
 
-    # Noms distincts pour les deux runs. Sans cela le second écraserait le
-    # premier et on perdrait la comparaison qui justifie tout le projet.
+    # Distinct names for the two runs: otherwise the second would overwrite
+    # the first and we would lose the comparison the project rests on.
     prefixe = "covdiag" if args.diagonale else "cov"
     chemin_last = os.path.join(DOSSIER_CKPT, "%s_last.pt" % prefixe)
     chemin_best = os.path.join(DOSSIER_CKPT, "%s_best.pt" % prefixe)
@@ -140,11 +140,11 @@ def main():
     print("modèle   : %s" % ("référence DIAGONALE" if args.diagonale
                              else "covariance STRUCTURÉE"))
 
-    # ---- le débruiteur, gelé --------------------------------------------
+    # ---- the frozen denoiser --------------------------------------------
     dncnn, epoch_dncnn = charger_dncnn(args.dncnn, appareil)
     print("DnCNN    : %s (epoch %d), gelé" % (args.dncnn, epoch_dncnn))
 
-    # ---- données ---------------------------------------------------------
+    # ---- data ------------------------------------------------------------
     complet = CelebADataset("train")
     n_total = len(complet) if args.limite == 0 else min(args.limite, len(complet))
     n_val = min(args.val, n_total // 10)
@@ -169,32 +169,32 @@ def main():
     print("sigma    : %.4f (unités [-1, 1]), soit %.1f/255" % (sigma, SIGMA * 255))
     print("itérations par epoch : %d" % len(chargeur))
 
-    # Plancher de référence : la meilleure gaussienne ISOTROPE sur ce résidu.
-    # Toute NLL au-dessus signifie que le modèle n'a rien appris du tout.
+    # Reference floor: the best ISOTROPIC Gaussian on this residual.
+    # Any NLL above it means the model has learnt nothing at all.
     std_val = r_val.std().item()
     nll_isotrope = 0.5 * (1.0 + math.log(2.0 * math.pi * std_val ** 2))
     print("résidu de validation : écart-type %.4f" % std_val)
     print("NLL/pixel d'une gaussienne isotrope (plancher) : %+.4f"
           % nll_isotrope)
 
-    # ---- motif de parcimonie, calculé une fois --------------------------
+    # ---- sparsity pattern, computed once --------------------------------
     neighbor_idx, mask = build_neighbor_indices(device=appareil)
 
-    # ---- modèle ----------------------------------------------------------
+    # ---- model -----------------------------------------------------------
     cov_net = SparseCholeskyNet(diagonale_seule=args.diagonale).to(appareil)
     optimiseur = torch.optim.Adam(cov_net.parameters(), lr=args.lr)
     print("paramètres : %d" % sum(p.numel() for p in cov_net.parameters()))
 
-    # Pas de précision mixte ici, contrairement à train_dncnn.py. La NLL
-    # additionne 4096 termes puis prend une exponentielle : en float16 le
-    # cumul perd trop de chiffres et exp(log_diag) frôle la borne du format.
-    # Le gain de vitesse ne vaut pas le risque de NaN à la troisième heure.
+    # No mixed precision here, unlike train_dncnn.py. The NLL sums 4096
+    # terms then takes an exponential: in float16 the accumulation loses too
+    # many digits and exp(log_diag) comes close to the format's limit.
+    # The speed gain is not worth the risk of a NaN in the third hour.
 
     epoch_depart, meilleur, historique = 0, float("inf"), []
     if args.resume and os.path.exists(chemin_last):
         etat = charger_checkpoint(chemin_last, appareil)
-        # Garde-fou : reprendre un run structuré avec --diagonale (ou
-        # l'inverse) donnerait un modèle incohérent sans aucun message.
+        # Guard: resuming a structured run with --diagonale (or the other
+        # way round) would give an inconsistent model with no message at all.
         if etat.get("diagonale") != args.diagonale:
             raise SystemExit(
                 "ERREUR : le checkpoint %s a diagonale=%s, mais le run demande "
@@ -210,7 +210,7 @@ def main():
     elif args.resume:
         print("--resume demandé mais aucun checkpoint : départ de zéro.")
 
-    # ---- boucle ----------------------------------------------------------
+    # ---- loop ------------------------------------------------------------
     for epoch in range(epoch_depart, args.epochs):
         t0 = time.time()
         cumul, vus = 0.0, 0
@@ -219,9 +219,9 @@ def main():
             x = lot["x"].to(appareil, non_blocking=True)
             y = lot["y"].to(appareil, non_blocking=True)
 
-            # Le bruit est retiré à chaque accès par le Dataset : le réseau ne
-            # voit jamais deux fois le même résidu pour une même image. C'est
-            # ce qui l'empêche de mémoriser r au lieu d'en apprendre la loi.
+            # The noise is redrawn at every access by the Dataset: the network
+            # never sees the same residual twice for a given image. That is
+            # what stops it memorising r instead of learning its distribution.
             with torch.no_grad():
                 mu = dncnn(y)
             r = (x - mu).flatten(1)
@@ -275,7 +275,7 @@ def main():
             "args": vars(args),
         }
         sauvegarde_atomique(etat, chemin_last)
-        # Plus petit est meilleur : c'est une NLL, pas un PSNR.
+        # Smaller is better: this is an NLL, not a PSNR.
         if nll_val < meilleur:
             meilleur = nll_val
             sauvegarde_atomique(etat, chemin_best)

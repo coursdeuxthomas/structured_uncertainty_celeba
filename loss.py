@@ -1,45 +1,48 @@
 """
-Loss NLL gaussienne structurée pour CelebA (Cholesky CREUSE de la précision).
+Structured Gaussian NLL loss for CelebA (SPARSE Cholesky of the precision).
 
-Reprise du projet ellipses, avec deux changements de constantes et un garde-fou
-numérique. Les deux fonctions centrales (`apply_LT` et `structured_gaussian_nll`)
-sont indépendantes de la taille d'image et du voisinage : elles passent de
-16x16 à 64x64 sans être touchées.
+Carried over from the ellipses project, with two constant changes and one
+numerical safeguard. The two central functions (`apply_LT` and
+`structured_gaussian_nll`) do not depend on the image size nor on the
+neighborhood: they go from 16x16 to 64x64 untouched.
 
-    ellipses : S = 16, n =  256, f = 5, m = 12  ->  13 valeurs par pixel
-    celebA   : S = 64, n = 4096, f = 7, m = 24  ->  25 valeurs par pixel
+    ellipses : S = 16, n =  256, f = 5, m = 12  ->  13 values per pixel
+    celebA   : S = 64, n = 4096, f = 7, m = 24  ->  25 values per pixel
 
-Motif de parcimonie de l'article (Dorta et al., 2018, §5.1) :
+Sparsity pattern of the article (Dorta et al., 2018, §5.1):
 
-    L[i, j] != 0  seulement si  i >= j  ET  les pixels i, j sont voisins
-    dans un patch f x f (ici f = 7).
+    L[i, j] != 0  only if  i >= j  AND the pixels i, j are neighbors
+    inside an f x f patch (here f = 7).
 
-Pour chaque pixel `i`, `L` n'a donc de valeurs non nulles que sur :
-- la diagonale `L[i, i]`, paramétrée par `log(l_ii)` (l'`exp` garantit > 0) ;
-- les `L[i, j]` pour `j` voisin CAUSAL de `i` (j vient avant i en ordre raster
-  ET dans le patch f x f). Pour f = 7 il y a 24 voisins causaux.
+For each pixel `i`, `L` therefore has non-zero values only on:
+- the diagonal `L[i, i]`, parameterized by `log(l_ii)` (the `exp` guarantees
+  > 0);
+- the `L[i, j]` for `j` a CAUSAL neighbor of `i` (j comes before i in raster
+  order AND lies inside the f x f patch). For f = 7 there are 24 causal
+  neighbors.
 
-La précision est `Lambda = L L^T` (symétrique définie positive par
-construction). La NLL gaussienne (Eq. 4 de l'article) se calcule SANS inverser
-Sigma :
+The precision is `Lambda = L L^T` (symmetric positive definite by
+construction). The Gaussian NLL (Eq. 4 of the article) is computed WITHOUT
+inverting Sigma:
 
     nll = 0.5 * [ log|Sigma| + r^T Lambda r + n*log(2*pi) ]
         = 0.5 * [ -2*sum_i log(l_ii) + || L^T r ||^2 + n*log(2*pi) ]
 
-avec ici `r = x - mu`, le résidu du DnCNN (et non `x - mu` d'une spline).
+with here `r = x - mu`, the residual of the DnCNN (and not the `x - mu` of a
+spline).
 
-`L^T r` se calcule directement à partir des valeurs non nulles, via un
-`scatter_add` : aucune matrice n x n n'est jamais formée. C'est la condition de
-survie du projet — à n = 4096, une seule matrice dense float32 pèse 67 Mo, et
-un batch de 64 en pèserait 4.3 Go.
+`L^T r` is computed directly from the non-zero values, through a
+`scatter_add`: no n x n matrix is ever formed. This is the survival condition
+of the project — at n = 4096, a single dense float32 matrix weighs 67 MB, and
+a batch of 64 would weigh 4.3 GB.
 
-CHANGEMENT PAR RAPPORT AUX ELLIPSES : `log_diag` est désormais borné à
-[-10, +10] avant l'`exp`. À 4096 pixels et sur données réelles, une valeur de
-diagonale qui part à +inf fait exploser la NLL en une itération ; en 16x16 sur
-données synthétiques on pouvait s'en passer, plus ici.
+CHANGE WITH RESPECT TO THE ELLIPSES: `log_diag` is now clamped to
+[-10, +10] before the `exp`. At 4096 pixels and on real data, a diagonal
+value that runs off to +inf makes the NLL explode in a single iteration; in
+16x16 on synthetic data one could do without it, no longer here.
 
-Usage :
-    python loss.py          # tests unitaires 16x16 + tests de forme 64x64
+Usage:
+    python loss.py          # 16x16 unit tests + 64x64 shape tests
 """
 
 import math
@@ -48,48 +51,49 @@ import numpy as np
 import torch
 
 
-# Constantes du projet (cf. CLAUDE.md, phase 0 de la roadmap).
-IMAGE_SIZE = 64      # images 64x64 -> n = 4096 pixels
-VOISINAGE = 7        # patch f x f de l'article -> m = 24 voisins causaux
+# Constants of the project (cf. CLAUDE.md, phase 0 of the roadmap).
+IMAGE_SIZE = 64      # 64x64 images -> n = 4096 pixels
+VOISINAGE = 7        # f x f patch of the article -> m = 24 causal neighbors
 CLAMP_LOG_DIAG = 10.0
 
-# Au-delà de cette taille, on refuse de construire une matrice dense : à
-# n = 4096 elle pèse 67 Mo par exemple. Les fonctions denses ne servent qu'aux
-# tests unitaires sur images jouets.
+# Beyond this size we refuse to build a dense matrix: at n = 4096 it weighs
+# 67 MB per example. The dense functions are only useful for the unit tests on
+# toy images.
 N_MAX_DENSE = 1024
 
 
 def clamp_log_diag(log_diag, limite=CLAMP_LOG_DIAG):
     """
-    Borne `log(l_ii)` dans [-limite, +limite] avant tout `exp`.
+    Clamps `log(l_ii)` into [-limite, +limite] before any `exp`.
 
-    En dehors de l'intervalle le gradient est nul : c'est exactement l'effet
-    voulu, une diagonale partie trop loin cesse d'être poussée plus loin. Les
-    bornes correspondent à `l_ii` entre `exp(-10) = 4.5e-5` et
-    `exp(10) = 2.2e4`, ce qui couvre très largement les échelles utiles pour un
-    résidu dans [-2, 2].
+    Outside the interval the gradient is zero: this is exactly the intended
+    effect, a diagonal that has gone too far stops being pushed further. The
+    bounds correspond to `l_ii` between `exp(-10) = 4.5e-5` and
+    `exp(10) = 2.2e4`, which covers by far the useful scales for a residual
+    in [-2, 2].
     """
     return torch.clamp(log_diag, min=-limite, max=limite)
 
 
 # ---------------------------------------------------------------------------
-# Motif de parcimonie : voisins causaux dans un patch f x f
+# Sparsity pattern: causal neighbors inside an f x f patch
 # ---------------------------------------------------------------------------
 def causal_offsets(f=VOISINAGE):
     """
-    Décalages (dr, dc) des voisins CAUSAUX (hors pixel courant) d'un patch f x f.
+    Offsets (dr, dc) of the CAUSAL neighbors (current pixel excluded) of an
+    f x f patch.
 
-    Un voisin `j = i + (dr, dc)` est causal si son indice raster est < celui de
-    `i`, c.-à-d. `dr < 0`, ou (`dr == 0` et `dc < 0`). En ordre raster
-    (index = row * S + col), cela garantit que `L` est bien triangulaire
-    inférieure.
+    A neighbor `j = i + (dr, dc)` is causal if its raster index is < that of
+    `i`, i.e. `dr < 0`, or (`dr == 0` and `dc < 0`). In raster order
+    (index = row * S + col), this guarantees that `L` is indeed lower
+    triangular.
 
-    Pour f = 7 (h = 3) il y a 24 décalages :
+    For f = 7 (h = 3) there are 24 offsets:
     - dr in {-3, -2, -1}, dc in {-3, ..., 3}  -> 21
     - dr == 0,            dc in {-3, -2, -1}  ->  3
 
-    Retour :
-        offsets : list[(dr, dc)] de longueur (f*f - 1) // 2
+    Return:
+        offsets : list[(dr, dc)] of length (f*f - 1) // 2
     """
     h = f // 2
     offsets = []
@@ -102,20 +106,20 @@ def causal_offsets(f=VOISINAGE):
 
 def build_neighbor_indices(image_size=IMAGE_SIZE, f=VOISINAGE, device=None):
     """
-    Précalcule, pour chaque pixel `i`, l'indice raster de ses voisins causaux et
-    un masque de validité (pixels hors image = invalides).
+    Precomputes, for each pixel `i`, the raster index of its causal neighbors
+    and a validity mask (pixels outside the image = invalid).
 
-    Retour :
-        neighbor_idx : LongTensor [n, m]  (m = 24 pour f = 7)
-                       neighbor_idx[i, k] = indice raster du k-ième voisin causal
-                       de i, ou `i` lui-même si le voisin sort de l'image (valeur
-                       neutralisée par le masque, la diagonale étant écrasée
-                       séparément).
-        mask         : FloatTensor [n, m], 1.0 si le voisin est dans l'image.
+    Return:
+        neighbor_idx : LongTensor [n, m]  (m = 24 for f = 7)
+                       neighbor_idx[i, k] = raster index of the k-th causal
+                       neighbor of i, or `i` itself if the neighbor falls out
+                       of the image (a value neutralized by the mask, the
+                       diagonal being overwritten separately).
+        mask         : FloatTensor [n, m], 1.0 if the neighbor is in the image.
 
-    Ces tenseurs ne dépendent pas de l'exemple : on les calcule UNE FOIS au début
-    de l'entraînement et on les réutilise pour tout le batch et toute
-    l'expérience. En 64x64 ils font [4096, 24], soit moins de 500 ko.
+    These tensors do not depend on the example: they are computed ONCE at the
+    beginning of training and reused for the whole batch and the whole
+    experiment. In 64x64 they are [4096, 24], that is less than 500 kB.
     """
     S = image_size
     n = S * S
@@ -133,8 +137,9 @@ def build_neighbor_indices(image_size=IMAGE_SIZE, f=VOISINAGE, device=None):
                 neighbor_idx[i, k] = rr * S + cc
                 mask[i, k] = 1.0
             else:
-                # Voisin hors image : on le renvoie sur `i` (colonne quelconque)
-                # et on le neutralise via le masque (0 -> contribution nulle).
+                # Neighbor out of the image: we send it back onto `i` (any
+                # column would do) and neutralize it with the mask (0 -> null
+                # contribution).
                 neighbor_idx[i, k] = i
                 mask[i, k] = 0.0
 
@@ -147,43 +152,46 @@ def build_neighbor_indices(image_size=IMAGE_SIZE, f=VOISINAGE, device=None):
 
 
 # ---------------------------------------------------------------------------
-# Produit L^T r sans matrice dense
+# Product L^T r without a dense matrix
 # ---------------------------------------------------------------------------
 def apply_LT(log_diag, offdiag, residual, neighbor_idx, mask):
     """
-    Calcule `w = L^T r` à partir des valeurs non nulles de `L`, sans jamais
-    construire la matrice n x n. Coût O(n*m) au lieu de O(n^2).
+    Computes `w = L^T r` from the non-zero values of `L`, without ever
+    building the n x n matrix. Cost O(n*m) instead of O(n^2).
 
-    Rappel : `L[i, i] = exp(log_diag[i])` et `L[i, neighbor_idx[i, k]] = offdiag[i, k]`.
-    On a `w_c = (L^T r)_c = sum_i L[i, c] r_i`, d'où :
-    - diagonale : `w_i += exp(log_diag_i) * r_i` ;
-    - hors-diag : chaque `L[i, j] * r_i` s'ajoute à `w_j` (scatter_add sur j).
+    Reminder: `L[i, i] = exp(log_diag[i])` and
+    `L[i, neighbor_idx[i, k]] = offdiag[i, k]`.
+    We have `w_c = (L^T r)_c = sum_i L[i, c] r_i`, hence:
+    - diagonal : `w_i += exp(log_diag_i) * r_i`;
+    - off-diag : each `L[i, j] * r_i` is added to `w_j` (scatter_add on j).
 
-    Cette fonction sert aussi à l'ÉVALUATION : `w = L^T r` doit suivre `N(0, I)`
-    si la covariance est bien calibrée (cf. eval_cov.py).
+    This function also serves for EVALUATION: `w = L^T r` must follow
+    `N(0, I)` if the covariance is well calibrated (cf. eval_cov.py).
 
-    Args :
-        log_diag     : [B, n]      valeurs log de la diagonale de L (bornées ici).
-        offdiag      : [B, n, m]   valeurs hors-diagonale (une par voisin causal).
+    Args:
+        log_diag     : [B, n]      log values of the diagonal of L (clamped
+                                   here).
+        offdiag      : [B, n, m]   off-diagonal values (one per causal
+                                   neighbor).
         residual     : [B, n]      r = x - mu.
-        neighbor_idx : [n, m]      indices des voisins causaux.
-        mask         : [n, m]      masque de validité des voisins.
+        neighbor_idx : [n, m]      indices of the causal neighbors.
+        mask         : [n, m]      validity mask of the neighbors.
 
-    Retour :
+    Return:
         w : [B, n],  w = L^T r.
     """
     B, n = residual.shape
     m = offdiag.shape[2]
 
-    # Terme diagonal. Le clamp est appliqué ici aussi pour que la fonction soit
-    # sûre quand on l'appelle directement (calibration), pas seulement via la NLL.
-    # Il est idempotent : le ré-appliquer ne change rien.
+    # Diagonal term. The clamp is applied here as well so that the function is
+    # safe when called directly (calibration), not only through the NLL.
+    # It is idempotent: re-applying it changes nothing.
     w = torch.exp(clamp_log_diag(log_diag)) * residual  # [B, n]
 
-    # Termes hors-diagonale : contribution de chaque pixel i à ses voisins j.
+    # Off-diagonal terms: contribution of each pixel i to its neighbors j.
     contrib = offdiag * mask.unsqueeze(0) * residual.unsqueeze(2)  # [B, n, m]
 
-    # scatter_add sur la dimension des pixels :
+    # scatter_add over the pixel dimension:
     # w[b, neighbor_idx[i, k]] += contrib[b, i, k].
     idx = neighbor_idx.reshape(1, n * m).expand(B, n * m)
     w = w.scatter_add(1, idx, contrib.reshape(B, n * m))
@@ -191,7 +199,7 @@ def apply_LT(log_diag, offdiag, residual, neighbor_idx, mask):
 
 
 # ---------------------------------------------------------------------------
-# NLL gaussienne structurée
+# Structured Gaussian NLL
 # ---------------------------------------------------------------------------
 def structured_gaussian_nll(
     log_diag,
@@ -203,32 +211,34 @@ def structured_gaussian_nll(
     mean_batch=True,
 ):
     """
-    NLL gaussienne (Eq. 4 de l'article) pour la précision structurée creuse.
+    Gaussian NLL (Eq. 4 of the article) for the sparse structured precision.
 
         nll = 0.5 * [ -2*sum_i log(l_ii) + ||L^T r||^2 + n*log(2*pi) ]
 
-    avec `log(l_ii) = log_diag_i` (donc `log|Sigma| = -2 sum_i log_diag_i`) et
-    `||L^T r||^2 = r^T Lambda r`. Aucune inversion, aucune matrice n x n.
+    with `log(l_ii) = log_diag_i` (hence `log|Sigma| = -2 sum_i log_diag_i`)
+    and `||L^T r||^2 = r^T Lambda r`. No inversion, no n x n matrix.
 
-    Les deux termes se lisent l'un contre l'autre : le terme quadratique pousse
-    la précision vers 0 (une covariance énorme rend tout résidu probable), le
-    log-déterminant l'en empêche (il récompense les grandes diagonales). Leur
-    équilibre est ce que le réseau apprend.
+    The two terms are read against each other: the quadratic term pushes the
+    precision towards 0 (a huge covariance makes any residual probable), the
+    log-determinant prevents it (it rewards large diagonals). Their balance is
+    what the network learns.
 
-    IMPORTANT : `log_diag` est borné AVANT d'être utilisé, et la MÊME valeur
-    bornée sert au log-déterminant et à `apply_LT`. Si les deux termes ne
-    voyaient pas la même diagonale, la loss ne serait plus une NLL cohérente.
+    IMPORTANT: `log_diag` is clamped BEFORE being used, and the SAME clamped
+    value serves the log-determinant and `apply_LT`. If the two terms did not
+    see the same diagonal, the loss would no longer be a coherent NLL.
 
-    Args :
-        log_diag, offdiag : sorties du réseau de covariance ([B, n] et [B, n, m]).
-        residual          : r = x - mu, [B, n]  (mu = DnCNN(y), gelé).
-        neighbor_idx, mask: motif de parcimonie (cf. build_neighbor_indices).
-        include_const     : ajoute le terme constant n*log(2*pi) (vraie NLL).
-                            À laisser True pour comparer des NLL entre modèles.
-        mean_batch        : moyenne sur le batch (sinon retour par exemple [B]).
+    Args:
+        log_diag, offdiag : outputs of the covariance network ([B, n] and
+                            [B, n, m]).
+        residual          : r = x - mu, [B, n]  (mu = DnCNN(y), frozen).
+        neighbor_idx, mask: sparsity pattern (cf. build_neighbor_indices).
+        include_const     : adds the constant term n*log(2*pi) (true NLL).
+                            To be left True to compare NLLs across models.
+        mean_batch        : average over the batch (otherwise per-example
+                            return [B]).
 
-    Retour :
-        nll : scalaire (mean_batch=True) ou [B].
+    Return:
+        nll : scalar (mean_batch=True) or [B].
     """
     n = residual.shape[1]
 
@@ -250,18 +260,18 @@ def structured_gaussian_nll(
 
 
 # ---------------------------------------------------------------------------
-# Reconstruction dense — TESTS UNITAIRES UNIQUEMENT, jamais en 64x64
+# Dense reconstruction — UNIT TESTS ONLY, never in 64x64
 # ---------------------------------------------------------------------------
 def build_L_dense(log_diag, offdiag, neighbor_idx, mask, force=False):
     """
-    Reconstruit la matrice de Cholesky creuse `L` sous forme DENSE [B, n, n].
+    Rebuilds the sparse Cholesky matrix `L` in DENSE form [B, n, n].
 
-    RÉSERVÉ AUX TESTS sur images jouets (16x16, n = 256, 262 ko par exemple).
-    En 64x64 la matrice pèse 67 Mo par exemple : la fonction refuse de la
-    construire, sauf `force=True` assumé.
+    RESERVED FOR THE TESTS on toy images (16x16, n = 256, 262 kB per example).
+    In 64x64 the matrix weighs 67 MB per example: the function refuses to
+    build it, unless a deliberately assumed `force=True`.
 
-    Retour :
-        L : [B, n, n], triangulaire inférieure, diagonale > 0.
+    Return:
+        L : [B, n, n], lower triangular, diagonal > 0.
     """
     B, n = log_diag.shape
     if n > N_MAX_DENSE and not force:
@@ -277,7 +287,7 @@ def build_L_dense(log_diag, offdiag, neighbor_idx, mask, force=False):
 
     L = torch.zeros(B, n, n, dtype=log_diag.dtype, device=device)
 
-    # Hors-diagonale : L[b, i, neighbor_idx[i, k]] += offdiag[b, i, k] (masqué).
+    # Off-diagonal: L[b, i, neighbor_idx[i, k]] += offdiag[b, i, k] (masked).
     rows = torch.arange(n, device=device).view(n, 1).expand(n, m).reshape(-1)  # [n*m]
     cols = neighbor_idx.reshape(-1)                                            # [n*m]
     vals = (offdiag * mask.unsqueeze(0)).reshape(B, n * m)                     # [B, n*m]
@@ -287,8 +297,8 @@ def build_L_dense(log_diag, offdiag, neighbor_idx, mask, force=False):
     cidx = cols.view(1, -1).expand(B, -1).reshape(-1)
     L.index_put_((bidx, ridx, cidx), vals.reshape(-1), accumulate=True)
 
-    # Diagonale : écrase toute valeur parasite (les voisins hors-image pointent
-    # sur i, mais leur valeur masquée est nulle -> pas d'effet ici).
+    # Diagonal: overwrites any spurious value (the out-of-image neighbors point
+    # onto i, but their masked value is null -> no effect here).
     diag = torch.exp(clamp_log_diag(log_diag))  # [B, n]
     idx = torch.arange(n, device=device)
     L[:, idx, idx] = diag
@@ -298,15 +308,16 @@ def build_L_dense(log_diag, offdiag, neighbor_idx, mask, force=False):
 def predicted_precision_and_covariance(log_diag, offdiag, neighbor_idx, mask,
                                        force=False):
     """
-    Renvoie (Lambda, Sigma) prédites à partir des sorties du réseau.
+    Returns the (Lambda, Sigma) predicted from the outputs of the network.
 
-        Lambda = L L^T           (précision)
+        Lambda = L L^T           (precision)
         Sigma  = Lambda^{-1}     (covariance)
 
-    RÉSERVÉ AUX TESTS, comme `build_L_dense` : l'inversion est en O(n^3), soit
-    6.9e10 flops par image en 64x64. L'évaluation réelle n'inverse jamais.
+    RESERVED FOR THE TESTS, like `build_L_dense`: the inversion is O(n^3),
+    that is 6.9e10 flops per image in 64x64. The real evaluation never
+    inverts.
 
-    Retour :
+    Return:
         Lambda : [B, n, n]
         Sigma  : [B, n, n]
     """
@@ -320,9 +331,10 @@ if __name__ == "__main__":
     torch.manual_seed(0)
 
     # =======================================================================
-    # A) Tests unitaires de l'ALGORITHME, en 16x16 avec le voisinage f = 7 du
-    #    projet. L'algorithme ne dépend pas de la taille d'image : le valider
-    #    en 256 pixels le valide en 4096, et la matrice dense reste à 262 ko.
+    # A) Unit tests of the ALGORITHM, in 16x16 with the f = 7 neighborhood of
+    #    the project. The algorithm does not depend on the image size:
+    #    validating it on 256 pixels validates it on 4096, and the dense
+    #    matrix stays at 262 kB.
     # =======================================================================
     S, f, B = 16, VOISINAGE, 4
     n = S * S
@@ -337,7 +349,7 @@ if __name__ == "__main__":
     offdiag = 0.1 * torch.randn(B, n, m)
     r = torch.randn(B, n)
 
-    # 1) L^T r creux == L^T r dense.
+    # 1) sparse L^T r == dense L^T r.
     w_sparse = apply_LT(log_diag, offdiag, r, neighbor_idx, mask)
     L = build_L_dense(log_diag, offdiag, neighbor_idx, mask)
     w_dense = torch.bmm(L.transpose(1, 2), r.unsqueeze(2)).squeeze(2)
@@ -345,21 +357,21 @@ if __name__ == "__main__":
     print("erreur max apply_LT vs dense : %.2e (doit etre ~0)" % err)
     assert err < 1e-4
 
-    # 2) L est bien triangulaire inférieure avec diagonale exp(log_diag).
+    # 2) L is indeed lower triangular with diagonal exp(log_diag).
     upper = torch.triu(L, diagonal=1).abs().max().item()
     diag_err = (torch.diagonal(L, dim1=1, dim2=2) - torch.exp(log_diag)).abs().max().item()
     print("masse triangle superieur : %.2e (doit etre 0)" % upper)
     print("erreur diagonale         : %.2e (doit etre 0)" % diag_err)
     assert upper == 0.0 and diag_err < 1e-6
 
-    # 3) Lambda = L L^T définie positive.
+    # 3) Lambda = L L^T positive definite.
     Lambda, Sigma = predicted_precision_and_covariance(log_diag, offdiag,
                                                        neighbor_idx, mask)
     eigmin = torch.linalg.eigvalsh(Lambda)[..., 0].min().item()
     print("valeur propre min de Lambda : %.3e (doit etre > 0)" % eigmin)
     assert eigmin > 0
 
-    # 4) NLL dense de référence vs structurée.
+    # 4) Reference dense NLL vs structured one.
     nll_struct = structured_gaussian_nll(log_diag, offdiag, r, neighbor_idx, mask)
     log_det_sigma = torch.logdet(Sigma)
     quad = torch.einsum("bi,bij,bj->b", r, Lambda, r)
@@ -369,8 +381,8 @@ if __name__ == "__main__":
     assert abs(nll_struct.item() - nll_ref.mean().item()) < 1e-1
 
     # =======================================================================
-    # B) Tests de FORME en 64x64, la taille réelle. Aucune matrice dense ici :
-    #    on vérifie les dimensions, la finitude et le passage du gradient.
+    # B) SHAPE tests in 64x64, the real size. No dense matrix here: we check
+    #    the dimensions, the finiteness and that the gradient flows through.
     # =======================================================================
     S, B = IMAGE_SIZE, 8
     n = S * S
@@ -402,14 +414,14 @@ if __name__ == "__main__":
     print("gradients : log_diag %s, offdiag %s (finis)"
           % (tuple(log_diag.grad.shape), tuple(offdiag.grad.shape)))
 
-    # NLL par exemple, utile à eval_cov.py.
+    # Per-example NLL, useful to eval_cov.py.
     nll_par_ex = structured_gaussian_nll(log_diag, offdiag, r, neighbor_idx, mask,
                                          mean_batch=False)
     assert nll_par_ex.shape == (B,)
 
     # =======================================================================
-    # C) Le clamp : une diagonale absurde ne doit pas produire d'inf/NaN.
-    #    C'est l'ajout par rapport au projet ellipses.
+    # C) The clamp: an absurd diagonal must not produce inf/NaN.
+    #    This is the addition with respect to the ellipses project.
     # =======================================================================
     print()
     print("=== C) clamp de log_diag ===")
@@ -426,7 +438,7 @@ if __name__ == "__main__":
     print("gradient sur log_diag sature : %.2e (doit etre 0)" % grad_max)
     assert grad_max == 0.0, "le clamp doit couper le gradient hors bornes"
 
-    # Le garde-fou dense doit refuser n = 4096.
+    # The dense safeguard must refuse n = 4096.
     try:
         build_L_dense(log_diag[:1].detach(), offdiag[:1].detach(),
                       neighbor_idx, mask)

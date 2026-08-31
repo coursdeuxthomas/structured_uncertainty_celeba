@@ -1,18 +1,18 @@
 """
-Entraînement du DnCNN (étape 1 du projet).
+Training of the DnCNN (step 1 of the project).
 
-    python train_dncnn.py --epochs 3 --limite 20000     # test de la chaîne
-    python train_dncnn.py --epochs 50 --resume          # le vrai run
+    python train_dncnn.py --epochs 3 --limite 20000     # pipeline test
+    python train_dncnn.py --epochs 50 --resume          # the real run
 
-La partition `short` du cluster est limitée à 1 h 55 et un entraînement complet
-demande plusieurs heures : la REPRISE SUR CHECKPOINT est écrite dès cette
-première version. `--resume` repart de checkpoints/dncnn_last.pt, optimiseur et
-numéro d'epoch compris.
+The cluster's `short` partition is capped at 1 h 55 and a complete training
+run takes several hours: CHECKPOINT RESUMING is written from this very first
+version onwards. `--resume` restarts from checkpoints/dncnn_last.pt, optimiser
+and epoch number included.
 
-Sorties :
-    checkpoints/dncnn_last.pt     état complet, réécrit à chaque epoch
-    checkpoints/dncnn_best.pt     meilleur PSNR de validation
-    results/history_dncnn.json    courbes, réécrites à chaque epoch
+Outputs:
+    checkpoints/dncnn_last.pt     full state, rewritten at each epoch
+    checkpoints/dncnn_best.pt     best validation PSNR
+    results/history_dncnn.json    curves, rewritten at each epoch
 """
 
 import argparse
@@ -29,9 +29,9 @@ from data import CelebADataset, SIGMA
 from dncnn import DnCNN
 
 
-# torch.amp a remplace torch.cuda.amp dans les versions recentes. On prend la
-# nouvelle API si elle existe, l'ancienne sinon : le code tourne sur le cluster
-# quelle que soit la version installee dans l'environnement conda.
+# torch.amp replaced torch.cuda.amp in recent versions. We take the new API
+# if it exists, the old one otherwise: the code runs on the cluster whatever
+# version happens to be installed in the conda environment.
 try:
     from torch.amp import GradScaler as _GradScaler, autocast as _autocast
 
@@ -52,31 +52,31 @@ DOSSIER_RES = "results"
 
 
 # --------------------------------------------------------------------------
-# Utilitaires
+# Utilities
 # --------------------------------------------------------------------------
 def psnr(mse_pm1):
     """
-    PSNR en dB, exprimé dans l'échelle [0, 1] qui est la convention de la
-    littérature sur le débruitage.
+    PSNR in dB, expressed in the [0, 1] scale, which is the convention of the
+    denoising literature.
 
-    Nos images vivent dans [-1, 1]. Le passage à [0, 1] divise l'amplitude par
-    2, donc l'erreur quadratique par 4. Sans cette correction on annoncerait un
-    PSNR faux de 6 dB.
+    Our images live in [-1, 1]. Moving to [0, 1] divides the amplitude by 2,
+    hence the squared error by 4. Without this correction we would report a
+    PSNR that is wrong by 6 dB.
     """
     mse_01 = mse_pm1 / 4.0
-    # float() et pas np.float64 : depuis PyTorch 2.6, torch.load refuse par
-    # defaut de deserialiser des scalaires numpy, et la reprise sur checkpoint
-    # echouerait au moment ou on en a le plus besoin.
+    # float() and not np.float64: since PyTorch 2.6, torch.load refuses by
+    # default to deserialise numpy scalars, and checkpoint resuming would
+    # fail at the very moment we need it most.
     return float(10.0 * np.log10(1.0 / max(mse_01, 1e-12)))
 
 
 def sauvegarde_atomique(objet, chemin):
     """
-    Écrit d'abord un fichier temporaire, puis le renomme.
+    Write a temporary file first, then rename it.
 
-    Un job SLURM peut être tué à n'importe quel instant. Sans cette précaution,
-    une interruption pendant torch.save laisserait un checkpoint tronqué —
-    c'est-à-dire un run perdu, découvert seulement à la reprise.
+    A SLURM job can be killed at any moment. Without this precaution, an
+    interruption during torch.save would leave a truncated checkpoint —
+    that is, a lost run, discovered only when resuming.
     """
     tmp = chemin + ".tmp"
     torch.save(objet, tmp)
@@ -85,13 +85,13 @@ def sauvegarde_atomique(objet, chemin):
 
 def verifier_noeud_de_calcul(forcer):
     """
-    Refuse de demarrer hors d'un job SLURM.
+    Refuse to start outside a SLURM job.
 
-    Les GPU ne sont visibles que dans un job. Lancer un entrainement sur le
-    noeud de connexion le sature pour tous les utilisateurs du cluster, et
-    tourne de toute facon sur CPU, donc des dizaines de fois plus lentement.
-    Le garde-fou coute deux lignes et evite une erreur qu'on ne remarque pas
-    tout de suite.
+    The GPUs are only visible from inside a job. Launching a training run
+    on the login node saturates it for every user of the cluster, and it
+    runs on the CPU anyway, hence tens of times more slowly. The guard
+    costs two lines and avoids a mistake that one does not notice straight
+    away.
     """
     if forcer or os.environ.get("SLURM_JOB_ID"):
         return
@@ -111,27 +111,27 @@ def verifier_noeud_de_calcul(forcer):
 
 def charger_checkpoint(chemin, appareil):
     """
-    Charge un checkpoint ecrit par ce script.
+    Load a checkpoint written by this script.
 
-    PyTorch 2.6 a bascule torch.load sur weights_only=True par defaut, ce qui
-    refuse tout ce qui n'est pas un tenseur ou un type de base. Nos checkpoints
-    contiennent l'historique et les arguments : on desactive explicitement le
-    garde-fou, ce qui est sans risque puisque le fichier vient de nous.
+    PyTorch 2.6 switched torch.load to weights_only=True by default, which
+    refuses anything that is not a tensor or a basic type. Our checkpoints
+    contain the history and the arguments: we explicitly disable the guard,
+    which carries no risk since the file comes from us.
     """
     try:
         return torch.load(chemin, map_location=appareil, weights_only=False)
-    except TypeError:                                     # torch tres ancien
+    except TypeError:                                     # very old torch
         return torch.load(chemin, map_location=appareil)
 
 
 def construire_validation(dataset, indices, sigma, graine, appareil):
     """
-    Prépare une fois pour toutes le jeu de validation, avec un bruit FIGÉ.
+    Prepare the validation set once and for all, with FROZEN noise.
 
-    Le Dataset tire son bruit à la volée : deux évaluations successives sur les
-    mêmes images ne donneraient pas le même PSNR, et la courbe de validation
-    serait bruitée pour une raison qui n'a rien à voir avec l'apprentissage.
-    On fige donc une réalisation, une bonne fois.
+    The Dataset draws its noise on the fly: two successive evaluations on the
+    same images would not give the same PSNR, and the validation curve would
+    be noisy for a reason that has nothing to do with learning.
+    So we freeze one realisation, once and for all.
     """
     generateur = torch.Generator().manual_seed(graine)
     xs = [dataset.images[i] for i in indices]
@@ -144,7 +144,7 @@ def construire_validation(dataset, indices, sigma, graine, appareil):
 
 @torch.no_grad()
 def evaluer(modele, x_val, y_val, batch):
-    """MSE moyenne sur le jeu de validation."""
+    """Mean MSE on the validation set."""
     modele.eval()
     total, n = 0.0, 0
     for debut in range(0, len(x_val), batch):
@@ -188,19 +188,19 @@ def main():
     if appareil.type == "cuda":
         print("GPU      : %s" % torch.cuda.get_device_name(0))
 
-    # ---- données ---------------------------------------------------------
+    # ---- data ------------------------------------------------------------
     complet = CelebADataset("train")
     n_total = len(complet) if args.limite == 0 else min(args.limite, len(complet))
 
-    # Le suivi se fait sur des images RETIRÉES du train, jamais vues par la
-    # descente de gradient. On préfère perdre 2 000 images d'entraînement
-    # plutôt que de surveiller le modèle sur le jeu de test : la NLL finale
-    # doit rester une mesure honnête.
+    # Monitoring is done on images REMOVED from the train set, never seen by
+    # gradient descent. We would rather lose 2,000 training images than watch
+    # the model on the test set: the final NLL must remain an honest
+    # measurement.
     n_val = min(args.val, n_total // 10)
     indices_val = list(range(n_total - n_val, n_total))
     indices_train = list(range(0, n_total - n_val))
 
-    sigma = complet.sigma            # déjà converti en unités [-1, 1]
+    sigma = complet.sigma            # already converted to [-1, 1] units
     x_val, y_val = construire_validation(complet, indices_val, sigma,
                                          args.graine + 1, appareil)
 
@@ -216,12 +216,12 @@ def main():
           (sigma, SIGMA * 255))
     print("itérations par epoch : %d" % len(chargeur))
 
-    # Repère : le PSNR de l'image bruitée elle-même. Le modèle doit faire
-    # nettement mieux, sinon il n'apprend rien.
+    # Reference point: the PSNR of the noisy image itself. The model must do
+    # markedly better, otherwise it is learning nothing.
     mse_bruit = torch.mean((y_val - x_val) ** 2).item()
     print("PSNR de y (référence à battre) : %.2f dB" % psnr(mse_bruit))
 
-    # ---- modèle ----------------------------------------------------------
+    # ---- model -----------------------------------------------------------
     modele = DnCNN().to(appareil)
     optimiseur = torch.optim.Adam(modele.parameters(), lr=args.lr)
     echelle = creer_echelle(args.amp and appareil.type == "cuda")
@@ -240,7 +240,7 @@ def main():
     elif args.resume:
         print("--resume demandé mais aucun checkpoint : départ de zéro.")
 
-    # ---- boucle ----------------------------------------------------------
+    # ---- loop ------------------------------------------------------------
     perte = nn.MSELoss()
     for epoch in range(epoch_depart, args.epochs):
         t0 = time.time()
@@ -253,8 +253,8 @@ def main():
             optimiseur.zero_grad(set_to_none=True)
             with contexte_amp(echelle.is_enabled()):
                 mu = modele(y)
-                # MSE(mu, x) est identique à MSE(bruit prédit, bruit vrai) :
-                # mu - x = (y - n_pred) - x = n_vrai - n_pred.
+                # MSE(mu, x) is identical to MSE(predicted noise, true
+                # noise): mu - x = (y - n_pred) - x = n_true - n_pred.
                 cout = perte(mu, x)
             echelle.scale(cout).backward()
             echelle.step(optimiseur)
@@ -296,8 +296,8 @@ def main():
             sauvegarde_atomique(etat, os.path.join(DOSSIER_CKPT, "dncnn_best.pt"))
             print("  meilleur modèle sauvegardé (%.2f dB)" % meilleur)
 
-        # Réécrit à chaque epoch, pas seulement à la fin : un job tué ne doit
-        # pas emporter les courbes avec lui.
+        # Rewritten at each epoch, not only at the end: a killed job must not
+        # take the curves down with it.
         with open(os.path.join(DOSSIER_RES, "history_dncnn.json"), "w") as f:
             json.dump(historique, f, indent=2)
 

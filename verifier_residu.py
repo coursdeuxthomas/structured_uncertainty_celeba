@@ -1,26 +1,26 @@
 """
-LA VÉRIFICATION CRITIQUE.
+THE CRITICAL CHECK.
 
     python verifier_residu.py --checkpoint checkpoints/dncnn_best.pt
 
-Tout le projet repose sur une hypothèse : le résidu `r = x - DnCNN(y)`, ce que
-le débruiteur a retiré en trop, contient de la STRUCTURE SPATIALE. Si `r`
-ressemble à du bruit blanc, une covariance diagonale suffirait à le décrire et
-il n'y a rien à apprendre : le projet n'a pas d'objet.
+The whole project rests on one hypothesis: the residual `r = x - DnCNN(y)`,
+what the denoiser removed in excess, contains SPATIAL STRUCTURE. If `r` looks
+like white noise, a diagonal covariance would be enough to describe it and
+there is nothing to learn: the project has no purpose.
 
-Ce script tranche la question, visuellement et numériquement.
+This script settles the question, visually and numerically.
 
-Ce qu'il faut comprendre avant de lire le résultat : `r` est un MÉLANGE de deux
-choses.
+What has to be understood before reading the result: `r` is a MIXTURE of two
+things.
 
-    r = (bruit résiduel non retiré)  +  (détail de l'image détruit au passage)
-         composante blanche               composante structurée
+    r = (residual noise not removed)  +  (image detail destroyed on the way)
+         white component                  structured component
 
-Son autocorrélation montre donc un pic étroit au centre — la part blanche — et,
-si l'hypothèse tient, un ÉLARGISSEMENT autour de ce pic. C'est cet
-élargissement qui justifie le projet, pas la hauteur du pic.
+Its autocorrelation therefore shows a narrow peak at the centre — the white
+part — and, if the hypothesis holds, a BROADENING around that peak. It is
+that broadening which justifies the project, not the height of the peak.
 
-Sorties :
+Outputs:
     results/residu.png
 """
 
@@ -39,15 +39,15 @@ from dncnn import DnCNN
 
 def autocorrelation_2d(champs):
     """
-    Autocorrélation spatiale moyenne d'un lot d'images [N, H, W].
+    Mean spatial autocorrelation of a batch of images [N, H, W].
 
-    Passage par la FFT : l'autocorrélation est la transformée inverse du
-    spectre de puissance. On centre chaque image d'abord, sinon la moyenne
-    domine tout. Normalisation par la valeur au décalage nul, pour que le
-    centre vaille 1 et que la carte se lise comme des corrélations.
+    Going through the FFT: the autocorrelation is the inverse transform of
+    the power spectrum. Each image is centred first, otherwise the mean
+    dominates everything. Normalisation by the value at zero shift, so that
+    the centre equals 1 and the map reads as correlations.
 
-    Note : la FFT suppose des bords périodiques. À 64x64 l'effet est marginal
-    pour les décalages courts, qui sont les seuls qui nous intéressent.
+    Note: the FFT assumes periodic borders. At 64x64 the effect is marginal
+    for short shifts, which are the only ones we are interested in.
     """
     c = champs - champs.mean(axis=(-2, -1), keepdims=True)
     spectre = np.abs(np.fft.fft2(c)) ** 2
@@ -59,7 +59,7 @@ def autocorrelation_2d(champs):
 
 
 def profil_radial(carte):
-    """Moyenne de la carte d'autocorrélation sur des anneaux de rayon entier."""
+    """Mean of the autocorrelation map over rings of integer radius."""
     h, w = carte.shape
     cy, cx = h // 2, w // 2
     yy, xx = np.mgrid[0:h, 0:w]
@@ -84,13 +84,13 @@ def main():
     try:
         etat = torch.load(args.checkpoint, map_location=appareil,
                           weights_only=False)
-    except TypeError:                                     # torch tres ancien
+    except TypeError:                                     # very old torch
         etat = torch.load(args.checkpoint, map_location=appareil)
     modele.load_state_dict(etat["modele"])
     modele.eval()
     print("checkpoint : %s  (epoch %d)" % (args.checkpoint, etat["epoch"]))
 
-    # Bruit figé : le diagnostic doit être reproductible.
+    # Frozen noise: the diagnostic must be reproducible.
     generateur = torch.Generator().manual_seed(args.graine)
     brut = np.stack([jeu.images[i] for i in range(args.n)])
     x = torch.from_numpy(brut.astype(np.float32) / 127.5 - 1.0).unsqueeze(1)
@@ -102,8 +102,8 @@ def main():
     r = (x - mu).squeeze(1).numpy()          # [N, 64, 64]
     bruit_ajoute = (y - x).squeeze(1).numpy()
 
-    # Témoin : du bruit blanc de même écart-type que r. C'est la référence
-    # contre laquelle « structuré » veut dire quelque chose.
+    # Control: white noise with the same standard deviation as r. It is the
+    # reference against which "structured" means something.
     temoin = np.random.default_rng(args.graine).normal(0.0, r.std(), r.shape)
 
     a_r = autocorrelation_2d(r)

@@ -8,22 +8,22 @@
 #SBATCH --gres=gpu:1
 #SBATCH --exclude=node031,node032
 #
-# node031 (Pascal) et node032 (GTX 1080 Ti) sont en sm_61. Le torch de l'env
-# dncnn est compile pour sm_75 et au-dela : sur ces deux noeuds il echoue des
-# la premiere operation CUDA avec
+# node031 (Pascal) and node032 (GTX 1080 Ti) are sm_61. The torch in the
+# dncnn env is compiled for sm_75 and above: on those two nodes it fails on
+# the very first CUDA operation with
 #   "no kernel image is available for execution on the device".
-# Les autres noeuds GPU de la partition conviennent : Tesla T4 et Quadro
-# RTX 6000 en sm_75, L40S en sm_89 (couvert par les binaires sm_86).
-# Pour viser le plus rapide au prix d'une attente plus longue :
-#   #SBATCH --gres=gpu:l40s:1     a la place de la ligne gres ci-dessus
+# The other GPU nodes of the partition are fine: Tesla T4 and Quadro
+# RTX 6000 in sm_75, L40S in sm_89 (covered by the sm_86 binaries).
+# To aim for the fastest one at the price of a longer wait:
+#   #SBATCH --gres=gpu:l40s:1     instead of the gres line above
 #SBATCH --output=logs/dncnn_%j.out
 #
-#   mkdir -p logs            <- une seule fois, AVANT le premier sbatch
-#   sbatch train_dncnn.bash        50 epochs (defaut)
-#   sbatch train_dncnn.bash 3      run court de validation
+#   mkdir -p logs            <- once only, BEFORE the first sbatch
+#   sbatch train_dncnn.bash        50 epochs (default)
+#   sbatch train_dncnn.bash 3      short validation run
 #
-# --resume reprend le checkpoint s'il existe : relancer ce meme script apres
-# la coupure des 1 h 55 poursuit l'entrainement la ou il s'etait arrete.
+# --resume picks the checkpoint back up if it exists: relaunching this same
+# script after the 1 h 55 cutoff carries on training where it left off.
 
 EPOCHS=${1:-50}
 
@@ -44,9 +44,9 @@ which python
 python -c "import torch; print('torch:', torch.__version__, '| cuda:', torch.cuda.is_available())"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-# -u : sortie non tamponnee. Sans lui, quand stdout est un FICHIER et non un
-# terminal, Python accumule les print dans un tampon de 8 Ko et le log reste
-# vide plusieurs minutes. tail -f ne montrerait rien.
+# -u : unbuffered output. Without it, when stdout is a FILE and not a
+# terminal, Python piles the prints up in an 8 KB buffer and the log stays
+# empty for several minutes. tail -f would show nothing.
 python -u train_dncnn.py --epochs "$EPOCHS" --amp --resume
 
 echo "Job finished:"

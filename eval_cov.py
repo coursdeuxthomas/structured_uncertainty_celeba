@@ -1,36 +1,37 @@
 """
-Évaluation du réseau de covariance — phase 6 du projet.
+Evaluation of the covariance network — phase 6 of the project.
 
-    python eval_cov.py                  # 2000 images de test, les deux modèles
-    python eval_cov.py --n 0            # tout le jeu de test (19 962 images)
-    python eval_cov.py --verif          # auto-tests numériques, sans données
+    python eval_cov.py                  # 2000 test images, both models
+    python eval_cov.py --n 0            # the whole test set (19,962 images)
+    python eval_cov.py --verif          # numerical self-tests, no data
 
-La difficulté de cette phase est conceptuelle avant d'être technique : sur
-données réelles `Sigma_true` N'EXISTE PAS. Ni distance de Frobenius, ni
-divergence de KL — les deux métriques du projet ellipses disparaissent avec
-elle. Quatre choses les remplacent, et elles suffisent (§7 de tuteur.txt) :
+The difficulty of this phase is conceptual before it is technical: on real
+data `Sigma_true` DOES NOT EXIST. Neither the Frobenius distance nor the KL
+divergence — the two metrics of the ellipses project — survives without it.
+Four things replace them, and they are enough (§7 of docs/tuteur.txt):
 
-    (1) la NLL sur le jeu de TEST ;
-    (2) la RÉFÉRENCE DIAGONALE, seul étalon qui donne un sens à (1) ;
-    (3) la CALIBRATION du résidu blanchi w = L^T r, qui doit suivre N(0, I) ;
-    (4) les figures : mu + eps diagonal contre mu + eps structuré.
+    (1) the NLL on the TEST set;
+    (2) the DIAGONAL BASELINE, the only yardstick that gives (1) a meaning;
+    (3) the CALIBRATION of the whitened residual w = L^T r, which must
+        follow N(0, I);
+    (4) the figures: mu + eps diagonal against mu + eps structured.
 
-Le point (3) est le plus informatif des quatre. Si la covariance était juste,
-`w` serait un bruit blanc de variance 1 : sa variance mesure la sur- ou
-sous-confiance du modèle, et son AUTOCORRÉLATION dit si la structure spatiale
-du résidu a été capturée. Le modèle diagonal ne peut, par construction, que
-recalibrer l'amplitude pixel par pixel : son `w` garde l'autocorrélation du
-résidu. C'est la mesure la plus directe de ce que les 24 canaux hors-diagonale
-apportent.
+Point (3) is the most informative of the four. If the covariance were right,
+`w` would be white noise of variance 1: its variance measures the model's
+over- or under-confidence, and its AUTOCORRELATION tells whether the spatial
+structure of the residual has been captured. The diagonal model can, by
+construction, only recalibrate the amplitude pixel by pixel: its `w` keeps the
+autocorrelation of the residual. This is the most direct measure of what the
+24 off-diagonal channels bring.
 
-AUCUNE MATRICE n x n N'EST FORMÉE. À n = 4096 une seule pèse 67 Mo. La NLL et
-la calibration passent par `apply_LT` (coût O(n*m)), l'échantillonnage par une
-substitution arrière creuse.
+NO n x n MATRIX IS EVER FORMED. At n = 4096 a single one weighs 67 MB. The NLL
+and the calibration go through `apply_LT` (cost O(n*m)), the sampling through
+a sparse back substitution.
 
-Sorties :
-    results/eval_cov.json        tous les chiffres
-    results/echantillons.png     les 5 colonnes (Fig. 7 et 19 de l'article)
-    results/calibration.png      cartes de variance et autocorrélations
+Outputs:
+    results/eval_cov.json        every number
+    results/echantillons.png     the 5 columns (Fig. 7 and 19 of the article)
+    results/calibration.png      variance maps and autocorrelations
 """
 
 import argparse
@@ -48,9 +49,9 @@ from cov_model import SparseCholeskyNet
 from data import CelebADataset
 from loss import (IMAGE_SIZE, VOISINAGE, apply_LT, build_neighbor_indices,
                   causal_offsets, clamp_log_diag, structured_gaussian_nll)
-# Mêmes raisons que dans train_cov.py : ces fonctions posent ici exactement le
-# même problème qu'à l'entraînement (chargement tolérant des checkpoints, bruit
-# de validation figé, débruiteur gelé), autant les importer que les recopier.
+# Same reasons as in train_cov.py: here these functions face exactly the same
+# problem as at training time (tolerant checkpoint loading, frozen validation
+# noise, frozen denoiser), so importing them beats copying them out.
 from train_cov import charger_dncnn
 from train_dncnn import charger_checkpoint, construire_validation
 from verifier_residu import autocorrelation_2d, profil_radial
@@ -59,16 +60,16 @@ DOSSIER_RES = "results"
 
 
 # --------------------------------------------------------------------------
-# Chargement
+# Loading
 # --------------------------------------------------------------------------
 def charger_cov(chemin, appareil):
     """
-    Charge un réseau de covariance et rétablit le MODE avec lequel il a été
-    entraîné (structuré ou diagonale seule).
+    Loads a covariance network and restores the MODE it was trained with
+    (structured, or diagonal only).
 
-    Le mode est lu dans le checkpoint, jamais deviné : instancier un réseau
-    structuré à partir de poids diagonaux ne planterait pas, cela donnerait
-    simplement des résultats faux et silencieux.
+    The mode is read from the checkpoint, never guessed: instantiating a
+    structured network from diagonal weights would not crash, it would simply
+    produce wrong results, silently.
     """
     etat = charger_checkpoint(chemin, appareil)
     if "diagonale" not in etat:
@@ -84,23 +85,23 @@ def charger_cov(chemin, appareil):
 
 
 # --------------------------------------------------------------------------
-# Produit L v  (le transposé de apply_LT, qui vit dans loss.py)
+# Product L v  (the transpose of apply_LT, which lives in loss.py)
 # --------------------------------------------------------------------------
 def apply_L(log_diag, offdiag, vecteur, neighbor_idx, mask):
     """
-    Calcule `z = L v` sans matrice dense, en O(n*m).
+    Computes `z = L v` with no dense matrix, in O(n*m).
 
-    `apply_LT` de loss.py disperse (scatter) ; celui-ci rassemble (gather) :
+    `apply_LT` from loss.py scatters; this one gathers:
 
         z_i = l_ii * v_i + sum_k offdiag[i, k] * v[neighbor_idx[i, k]]
 
-    Les deux ensemble donnent le produit par la précision, `Lambda v = L L^T v`,
-    dont denoise.py a besoin pour son filtre de Wiener. C'est la seule brique
-    qui manquait à loss.py, qui n'avait besoin que de L^T pour la NLL.
+    The two together give the product by the precision, `Lambda v = L L^T v`,
+    which denoise.py needs for its Wiener filter. This is the one building
+    block loss.py was missing, since it only ever needed L^T for the NLL.
 
-    Args :
+    Args:
         log_diag : [B, n]      offdiag : [B, n, m]      vecteur : [B, n]
-    Retour :
+    Returns:
         z : [B, n]
     """
     diag = torch.exp(clamp_log_diag(log_diag))
@@ -109,33 +110,34 @@ def apply_L(log_diag, offdiag, vecteur, neighbor_idx, mask):
 
 
 def appliquer_lambda(log_diag, offdiag, vecteur, neighbor_idx, mask):
-    """`Lambda v = L (L^T v)`. Symétrique définie positive, jamais formée."""
+    """`Lambda v = L (L^T v)`. Symmetric positive definite, never formed."""
     return apply_L(log_diag, offdiag,
                    apply_LT(log_diag, offdiag, vecteur, neighbor_idx, mask),
                    neighbor_idx, mask)
 
 
 # --------------------------------------------------------------------------
-# Échantillonnage : résoudre L^T eps = u
+# Sampling: solve L^T eps = u
 # --------------------------------------------------------------------------
 def build_anticausal_indices(image_size=IMAGE_SIZE, f=VOISINAGE, device=None):
     """
-    Le motif de parcimonie lu dans l'autre sens.
+    The sparsity pattern read the other way round.
 
-    `build_neighbor_indices` répond à « quels pixels j (avant i) influencent la
-    ligne i de L ». Pour la substitution arrière il faut la question inverse :
-    « quels pixels j (APRÈS i) ont i pour voisin causal », c'est-à-dire quelles
-    valeurs non nulles se trouvent dans la COLONNE i de L.
+    `build_neighbor_indices` answers "which pixels j (before i) influence row i
+    of L". For the back substitution the reverse question is needed: "which
+    pixels j (AFTER i) have i as a causal neighbour", that is, which non-zero
+    values sit in COLUMN i of L.
 
         neighbor_idx[j, k] = i   <=>   j = i - offset_k
 
-    Retour :
-        anti_idx  : [n, m], anti_idx[i, k] = j tel que neighbor_idx[j, k] = i
-                    (ou i lui-même si ce j sort de l'image),
-        anti_mask : [n, m], 1.0 si ce j existe.
+    Returns:
+        anti_idx  : [n, m], anti_idx[i, k] = j such that
+                    neighbor_idx[j, k] = i (or i itself if that j falls
+                    outside the image),
+        anti_mask : [n, m], 1.0 if that j exists.
 
-    Le coefficient à utiliser est alors `offdiag[anti_idx[i, k], k]` : le même
-    indice k des deux côtés, puisque c'est le même décalage.
+    The coefficient to use is then `offdiag[anti_idx[i, k], k]`: the same index
+    k on both sides, since it is the same offset.
     """
     S = image_size
     n = S * S
@@ -148,7 +150,7 @@ def build_anticausal_indices(image_size=IMAGE_SIZE, f=VOISINAGE, device=None):
     for i in range(n):
         r, c = divmod(i, S)
         for k, (dr, dc) in enumerate(offsets):
-            rr, cc = r - dr, c - dc          # signe opposé : c'est tout
+            rr, cc = r - dr, c - dc          # opposite sign: that is all
             if 0 <= rr < S and 0 <= cc < S:
                 anti_idx[i, k] = rr * S + cc
                 anti_mask[i, k] = 1.0
@@ -167,25 +169,26 @@ def build_anticausal_indices(image_size=IMAGE_SIZE, f=VOISINAGE, device=None):
 @torch.no_grad()
 def echantillonner_residu(log_diag, offdiag, anti_idx, anti_mask, u):
     """
-    Tire un résidu `eps ~ N(0, Sigma)` en résolvant `L^T eps = u`, `u ~ N(0, I)`.
+    Draws a residual `eps ~ N(0, Sigma)` by solving `L^T eps = u`,
+    `u ~ N(0, I)`.
 
-    Pourquoi cela marche : si `L^T eps = u` alors
-    `cov(eps) = L^-T I L^-1 = (L L^T)^-1 = Lambda^-1 = Sigma`. On n'inverse
-    donc jamais rien, on résout un système TRIANGULAIRE — et creux, avec 24
-    coefficients par ligne.
+    Why this works: if `L^T eps = u` then
+    `cov(eps) = L^-T I L^-1 = (L L^T)^-1 = Lambda^-1 = Sigma`. So nothing is
+    ever inverted, a TRIANGULAR system is solved instead — and a sparse one,
+    with 24 coefficients per row.
 
-    `L^T` est triangulaire SUPÉRIEURE : la substitution part du dernier pixel
-    et remonte l'ordre raster.
+    `L^T` is UPPER triangular: the substitution starts at the last pixel and
+    walks back up the raster order.
 
         eps_i = ( u_i - sum_{j > i} L[j, i] eps_j ) / l_ii
 
-    COÛT : la boucle est intrinsèquement séquentielle, n = 4096 itérations
-    Python quel que soit le nombre d'images (le batch est vectorisé). Comptez
-    quelques secondes. C'est sans importance : on n'échantillonne que pour les
-    figures, jamais dans une boucle d'entraînement.
+    COST: the loop is inherently sequential, n = 4096 Python iterations no
+    matter how many images there are (the batch is vectorised). Expect a few
+    seconds. It does not matter: sampling only ever happens for the figures,
+    never inside a training loop.
 
-    `offdiag = None` court-circuite la boucle : pour le modèle diagonal, L est
-    diagonale et eps se lit directement.
+    `offdiag = None` short-circuits the loop: for the diagonal model L is
+    diagonal and eps can be read off directly.
     """
     inv_diag = torch.exp(-clamp_log_diag(log_diag))          # 1 / l_ii
     if offdiag is None:
@@ -205,11 +208,11 @@ def echantillonner_residu(log_diag, offdiag, anti_idx, anti_mask, u):
 
 
 # --------------------------------------------------------------------------
-# Parcours du jeu de test
+# Walking through the test set
 # --------------------------------------------------------------------------
 @torch.no_grad()
 def calculer_mu_et_residu(dncnn, x, y, batch):
-    """mu = DnCNN(y) et r = x - mu, par lots pour ne pas saturer la mémoire."""
+    """mu = DnCNN(y) and r = x - mu, in batches so as not to fill memory."""
     mus = []
     for d in range(0, len(x), batch):
         mus.append(dncnn(y[d:d + batch]))
@@ -220,11 +223,11 @@ def calculer_mu_et_residu(dncnn, x, y, batch):
 @torch.no_grad()
 def nll_et_blanchi(cov_net, mu, r, batch, neighbor_idx, mask):
     """
-    NLL par image et résidu blanchi `w = L^T r`, sur tout le jeu.
+    Per-image NLL and whitened residual `w = L^T r`, over the whole set.
 
-    Retour :
-        nll : [N] (nat par IMAGE, constante n*log(2*pi) comprise)
-        w   : [N, n] sur le CPU (33 Mo pour 2000 images)
+    Returns:
+        nll : [N] (nats per IMAGE, the n*log(2*pi) constant included)
+        w   : [N, n] on the CPU (33 MB for 2000 images)
     """
     nlls, ws = [], []
     for d in range(0, len(mu), batch):
@@ -239,12 +242,12 @@ def nll_et_blanchi(cov_net, mu, r, batch, neighbor_idx, mask):
 
 def statistiques_calibration(w, n_cote=IMAGE_SIZE):
     """
-    Ce que doit vérifier `w = L^T r` si la covariance prédite est juste :
-    moyenne 0, variance 1, aucune corrélation spatiale.
+    What `w = L^T r` must satisfy if the predicted covariance is right:
+    mean 0, variance 1, no spatial correlation whatsoever.
 
-    La variance par pixel est la CARTE DE CONFIANCE : au-dessus de 1 le modèle
-    était trop confiant (il a prédit une covariance trop petite), en dessous il
-    ne l'était pas assez.
+    The per-pixel variance is the CONFIDENCE MAP: above 1 the model was
+    over-confident (it predicted too small a covariance), below 1 it was not
+    confident enough.
     """
     champs = w.reshape(-1, n_cote, n_cote).numpy()
     carte_var = champs.var(axis=0)
@@ -271,15 +274,14 @@ def statistiques_calibration(w, n_cote=IMAGE_SIZE):
 # --------------------------------------------------------------------------
 def figure_echantillons(x, y, mu, echantillons, chemin):
     """
-    La figure qui résume le projet (Fig. 7 et 19 de l'article).
+    The figure that sums up the project (Fig. 7 and 19 of the article).
 
-        x | y | mu | mu + eps diagonal | mu + eps structuré
+        x | y | mu | mu + eps diagonal | mu + eps structured
 
-    Les deux dernières colonnes portent le même bruit de départ `u` : ce qui
-    les sépare est UNIQUEMENT la covariance utilisée pour le transformer. La
-    colonne diagonale doit montrer de la neige (chaque pixel tiré
-    indépendamment), la colonne structurée du détail cohérent — des cheveux,
-    des contours, du grain de peau.
+    The last two columns carry the same starting noise `u`: what separates
+    them is ONLY the covariance used to transform it. The diagonal column
+    should show snow (each pixel drawn independently), the structured column
+    coherent detail — hair, edges, skin grain.
     """
     colonnes = [("x  (propre)", x), ("y  (bruitée)", y), ("mu = DnCNN(y)", mu)]
     colonnes += echantillons
@@ -301,20 +303,21 @@ def figure_echantillons(x, y, mu, echantillons, chemin):
 
 def figure_calibration(stats, profil_residu, chemin):
     """
-    Deux cartes de variance et deux profils d'autocorrélation.
+    Two variance maps and two autocorrelation profiles.
 
-    Le panneau qui compte est celui des profils : le modèle diagonal recalibre
-    l'amplitude pixel par pixel, donc son `w` garde la corrélation spatiale du
-    résidu (~0,55 à 1 pixel). Le modèle structuré doit l'écraser vers 0. C'est
-    la preuve, en une courbe, que les 24 canaux hors-diagonale servent.
+    The panel that matters is the one with the profiles: the diagonal model
+    recalibrates the amplitude pixel by pixel, so its `w` keeps the spatial
+    correlation of the residual (~0.55 at 1 pixel). The structured model has
+    to crush it down to 0. That is the proof, in a single curve, that the 24
+    off-diagonal channels earn their keep.
     """
     noms = list(stats.keys())
     fig, axes = plt.subplots(2, 2, figsize=(11, 9))
 
-    # Échelle en log2 : la variance de w est un RAPPORT à 1, donc « deux fois
-    # trop » et « deux fois trop peu » doivent se lire symétriquement. Les
-    # bornes s'adaptent aux données, sinon un modèle mal calibré donne une
-    # image uniformément saturée qui n'apprend rien.
+    # log2 scale: the variance of w is a RATIO to 1, so "twice too much" and
+    # "twice too little" must read symmetrically. The bounds adapt to the
+    # data, otherwise a badly calibrated model gives a uniformly saturated
+    # image that teaches nothing.
     cartes = [np.log2(np.maximum(stats[nom]["_carte_var"], 1e-6))
               for nom in noms[:2]]
     limite = max(1.0, max(float(np.percentile(np.abs(c), 99)) for c in cartes))
@@ -330,9 +333,9 @@ def figure_calibration(stats, profil_residu, chemin):
     if len(noms) < 2:
         axes[0, 1].axis("off")
 
-    # Borne au moins egale a 4 : c'est l'echelle de N(0, 1), celle qu'on veut
-    # lire quand le modele est calibre. Elle s'elargit si w deborde, plutot que
-    # d'ecraser tout le desaccord sur les deux barres du bord.
+    # Bound at least equal to 4: that is the scale of N(0, 1), the one we want
+    # to read when the model is calibrated. It widens if w overflows, rather
+    # than squashing all the disagreement onto the two edge bars.
     borne = max(4.0, max(float(np.percentile(np.abs(stats[nom]["_echantillon_w"]),
                                              99.5)) for nom in noms))
     for nom in noms:
@@ -365,15 +368,15 @@ def figure_calibration(stats, profil_residu, chemin):
 
 
 # --------------------------------------------------------------------------
-# Auto-tests numériques (--verif)
+# Numerical self-tests (--verif)
 # --------------------------------------------------------------------------
 def verifications():
     """
-    Contrôle des deux briques ajoutées ici, en 16x16 où la matrice dense tient
-    dans 262 ko et sert de vérité de référence.
+    Checks the two building blocks added here, in 16x16 where the dense matrix
+    fits in 262 kB and serves as the reference truth.
 
-    Rien de tout cela ne dépend de la taille de l'image : le valider en 256
-    pixels le valide en 4096, exactement comme pour les tests de loss.py.
+    None of this depends on the size of the image: validating it at 256 pixels
+    validates it at 4096, exactly as for the tests in loss.py.
     """
     from loss import build_L_dense, predicted_precision_and_covariance
 
@@ -398,8 +401,8 @@ def verifications():
 
     print()
     print("=== B) apply_L et apply_LT sont bien transposés l'un de l'autre ===")
-    # <L a, b> = <a, L^T b> pour tout a, b : identité qui ne peut être vraie
-    # par hasard, et qui teste les deux fonctions d'un coup.
+    # <L a, b> = <a, L^T b> for all a, b: an identity that cannot hold by
+    # accident, and that tests both functions in one go.
     a, b = torch.randn(B, n), torch.randn(B, n)
     g = (apply_L(log_diag, offdiag, a, neighbor_idx, mask) * b).sum(1)
     d = (a * apply_LT(log_diag, offdiag, b, neighbor_idx, mask)).sum(1)
@@ -418,8 +421,8 @@ def verifications():
 
     print()
     print("=== D) la covariance empirique des tirages est bien Sigma ===")
-    # 4 000 tirages pour UNE image : la covariance empirique doit converger
-    # vers la Sigma prédite. Tolérance large, c'est du Monte-Carlo.
+    # 4,000 draws for ONE image: the empirical covariance must converge to the
+    # predicted Sigma. Wide tolerance, this is Monte-Carlo.
     K = 4000
     ld = log_diag[:1].expand(K, n).contiguous()
     od = offdiag[:1].expand(K, n, m).contiguous()
@@ -472,7 +475,7 @@ def main():
     else:
         print("GPU : %s" % torch.cuda.get_device_name(0))
 
-    # ---- modèles ---------------------------------------------------------
+    # ---- models ----------------------------------------------------------
     dncnn, epoch_dncnn = charger_dncnn(args.dncnn, appareil)
     print("DnCNN : %s (epoch %d), gelé" % (args.dncnn, epoch_dncnn))
 
@@ -503,15 +506,15 @@ def main():
         print("    simplement grâce à la capacité du réseau. Lancez le second")
         print("    entraînement :  sbatch train_cov.bash --diagonale")
 
-    # Un réseau de covariance n'est valable que pour LE débruiteur sur lequel
-    # il a été entraîné : mu change, donc r change, donc la loi apprise ne
-    # correspond plus à rien. L'erreur ne produirait aucun message.
+    # A covariance network is only valid for THE denoiser it was trained on:
+    # mu changes, so r changes, so the learned law no longer matches anything.
+    # The mistake would produce no message at all.
     for nom, (_, e) in modeles.items():
         if e.get("dncnn") and e["dncnn"] != args.dncnn:
             print("/!\\ %s a été entraîné avec %s, on évalue avec %s."
                   % (nom, e["dncnn"], args.dncnn))
 
-    # ---- données de test, bruit figé -------------------------------------
+    # ---- test data, frozen noise -----------------------------------------
     jeu = CelebADataset("test")
     n_test = len(jeu) if args.n == 0 else min(args.n, len(jeu))
     indices = list(range(n_test))
@@ -529,7 +532,7 @@ def main():
 
     neighbor_idx, mask = build_neighbor_indices(device=appareil)
 
-    # ---- NLL et calibration ---------------------------------------------
+    # ---- NLL and calibration ---------------------------------------------
     resultats, stats = {}, {}
     for nom, (reseau, _) in modeles.items():
         nll, w = nll_et_blanchi(reseau, mu, r, args.batch, neighbor_idx, mask)
@@ -541,20 +544,19 @@ def main():
             "sigma_equivalent": float(math.exp(nll_pixel.mean() - 1.4189385)),
         }
         stats[nom] = statistiques_calibration(w)
-        # Sous-échantillon pour l'histogramme : 200 000 valeurs suffisent
-        # largement à dessiner une densité, et 8 millions rendraient la figure
-        # inutilement lourde.
+        # Sub-sample for the histogram: 200,000 values are plenty to draw a
+        # density, and 8 million would make the figure needlessly heavy.
         plat = w.flatten()
         pas = max(1, plat.numel() // 200000)
         stats[nom]["_echantillon_w"] = plat[::pas].numpy()
 
-    # Le résidu doit être mesuré EXACTEMENT comme w, sinon les lignes du
-    # tableau ne sont pas comparables. Piège : le profil radial au rayon 1
-    # moyenne les 4 voisins orthogonaux ET les 4 diagonaux (distance 1,41,
-    # arrondie à 1), ce qui donne un chiffre nettement plus bas que
-    # l'autocorrélation horizontale/verticale de verifier_residu.py — 0,46 au
-    # lieu de 0,55 sur le résidu du DnCNN. On garde les deux : la moyenne h/v
-    # pour le tableau, le profil radial pour la figure.
+    # The residual must be measured EXACTLY like w, otherwise the rows of the
+    # table are not comparable. Pitfall: the radial profile at radius 1
+    # averages the 4 orthogonal neighbours AND the 4 diagonal ones (distance
+    # 1.41, rounded to 1), which gives a markedly lower figure than the
+    # horizontal/vertical autocorrelation of verifier_residu.py — 0.46 instead
+    # of 0.55 on the DnCNN residual. We keep both: the h/v average for the
+    # table, the radial profile for the figure.
     auto_residu = autocorrelation_2d(
         r.reshape(-1, IMAGE_SIZE, IMAGE_SIZE).cpu().numpy())
     centre = auto_residu.shape[0] // 2
@@ -563,17 +565,16 @@ def main():
     profil_residu = profil_radial(auto_residu)
 
     # ---- figures ---------------------------------------------------------
-    # Images réparties sur tout le jeu de test plutôt que les premières :
-    # cinq visages consécutifs de CelebA se ressemblent trop pour être
-    # convaincants.
+    # Images spread over the whole test set rather than the first ones: five
+    # consecutive CelebA faces look far too much alike to be convincing.
     idx_fig = [int(v) for v in np.linspace(0, len(jeu) - 1, args.figures)]
     xf, yf = construire_validation(jeu, idx_fig, jeu.sigma,
                                    args.graine + 7, appareil)
     with torch.no_grad():
         muf = dncnn(yf)
 
-    # Le MÊME u pour les deux modèles : seule la covariance change d'une
-    # colonne à l'autre, ce qui rend la comparaison lisible.
+    # The SAME u for both models: only the covariance changes from one column
+    # to the other, which makes the comparison readable.
     u = torch.randn(len(idx_fig), n,
                     generator=torch.Generator().manual_seed(args.graine + 11))
     u = u.to(appareil)
@@ -597,7 +598,7 @@ def main():
     figure_calibration(stats, profil_residu,
                        os.path.join(DOSSIER_RES, "calibration.png"))
 
-    # ---- résumé ----------------------------------------------------------
+    # ---- summary ---------------------------------------------------------
     print()
     print("=" * 78)
     print("%-12s %14s %10s %10s %12s" % ("modèle", "NLL nat/pixel", "sigma eq.",
@@ -611,8 +612,8 @@ def main():
               % (nom, R["nll_pixel_moyenne"], R["nll_pixel_ecart_type"],
                  R["sigma_equivalent"], S["variance"],
                  0.5 * (S["autocorr_1px_h"] + S["autocorr_1px_v"])))
-    # Dernière ligne : le point de départ. NLL d'une gaussienne isotrope, et
-    # l'autocorrélation du résidu BRUT, celle que le blanchi doit effacer.
+    # Last row: the starting point. NLL of an isotropic Gaussian, and the
+    # autocorrelation of the RAW residual, the one whitening must wipe out.
     print("%-12s %+9.4f %6s %10.4f %10s %12.3f"
           % ("résidu brut", nll_isotrope, "", std_r, "-", autocorr_residu_hv))
     print("=" * 78)

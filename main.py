@@ -1,18 +1,18 @@
 """
-Orchestration : où en est le projet, et que lancer ensuite.
+Orchestration: where the project stands, and what to run next.
 
-    python main.py                # tableau de bord
-    python main.py --evaluation   # lance eval_cov.py puis denoise.py
+    python main.py                # dashboard
+    python main.py --evaluation   # runs eval_cov.py then denoise.py
 
-Le projet se déroule en huit étapes, dont trois sont de longs entraînements sur
-GPU. Ce script ne les lance PAS : un entraînement de cinq heures passe par
-sbatch, pas par un sous-processus qui mourrait avec la session SSH. Il lit ce
-qui a déjà été produit, affiche les chiffres obtenus, et donne la prochaine
-commande à taper.
+The project unfolds in eight steps, three of which are long trainings on GPU.
+This script does NOT launch them: a five-hour training goes through sbatch,
+not through a subprocess that would die with the SSH session. It reads what
+has already been produced, displays the numbers obtained, and gives the next
+command to type.
 
-Il n'importe volontairement ni torch ni numpy : tout se lit dans les fichiers
-JSON écrits à chaque epoch. Le tableau de bord fonctionne donc partout, y
-compris sur le nœud de connexion sans environnement conda activé.
+It deliberately imports neither torch nor numpy: everything is read from the
+JSON files written at each epoch. The dashboard therefore works everywhere,
+including on the login node with no conda environment activated.
 """
 
 import argparse
@@ -27,7 +27,7 @@ N_PIXELS = 64 * 64
 
 
 def lire_json(chemin):
-    """Renvoie le contenu du JSON, ou None s'il n'existe pas ou est illisible."""
+    """Returns the contents of the JSON, or None if missing or unreadable."""
     try:
         with open(chemin) as f:
             return json.load(f)
@@ -43,16 +43,16 @@ def taille(chemin):
 
 
 # --------------------------------------------------------------------------
-# Les huit étapes, dans l'ordre où elles doivent être franchies
+# The eight steps, in the order in which they must be cleared
 # --------------------------------------------------------------------------
 def etapes():
     """
-    Chaque étape : (nom, fichier témoin, commande, fonction de résumé).
+    Each step: (name, witness file, command, summary function).
 
-    Le « fichier témoin » est ce qui prouve que l'étape a été franchie. Pour
-    les entraînements c'est le checkpoint du meilleur modèle, pas le dernier :
-    un run interrompu à l'epoch 3 a bien un dncnn_last.pt, mais l'étape n'est
-    pas terminée pour autant.
+    The "witness file" is what proves the step has been cleared. For the
+    trainings it is the checkpoint of the best model, not the last one: a run
+    interrupted at epoch 3 does have a dncnn_last.pt, but the step is not
+    finished for all that.
     """
     cache = os.environ.get("CELEBA_CACHE", "celeba_64_gray.npy")
 
@@ -123,7 +123,7 @@ def etapes():
 
 
 def tableau_de_bord():
-    """Affiche l'état de chaque étape et la prochaine commande à lancer."""
+    """Displays the state of each step and the next command to launch."""
     print("=" * 78)
     print("CELEBA — STRUCTURED UNCERTAINTY : ÉTAT DU PROJET")
     print("=" * 78)
@@ -131,7 +131,7 @@ def tableau_de_bord():
     suivante = None
     for nom, temoin, commande, resume in etapes():
         if temoin is None:
-            # Étape qui ne produit aucun fichier : on ne peut rien affirmer.
+            # Step that produces no file: nothing can be asserted about it.
             print("[?] %-38s %s" % (nom, "(ne laisse pas de trace)"))
             continue
         fait = os.path.exists(temoin)
@@ -143,7 +143,7 @@ def tableau_de_bord():
     print("=" * 78)
     if suivante is None:
         print("Toutes les étapes sont franchies.")
-        print("  Les chiffres à reprendre dans tuteur.txt sont dans")
+        print("  Les chiffres à reprendre dans docs/tuteur.txt sont dans")
         print("  results/eval_cov.json et results/denoise.json.")
     else:
         print("PROCHAINE ACTION : %s" % suivante[0])
@@ -156,11 +156,11 @@ def tableau_de_bord():
 
 def evaluation():
     """
-    Enchaîne les deux étapes courtes : eval_cov.py puis denoise.py.
+    Chains the two short steps: eval_cov.py then denoise.py.
 
-    Elles tiennent en quelques minutes sur GPU et n'ont pas besoin de sbatch,
-    mais elles vont ensemble : la seconde n'a de sens que si la première a
-    confirmé que le modèle vaut quelque chose. On s'arrête au premier échec.
+    They take a few minutes on GPU and do not need sbatch, but they belong
+    together: the second only makes sense if the first has confirmed that the
+    model is worth something. We stop at the first failure.
     """
     for script in ("eval_cov.py", "denoise.py"):
         print()

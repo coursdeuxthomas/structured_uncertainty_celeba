@@ -1,19 +1,18 @@
 """
-Preuve empirique que les visages de CelebA sont alignés.
+Empirical proof that the CelebA faces are aligned.
 
     export CELEBA_CACHE=$HOME/data/celeba/celeba_64_gray.npy
     python verifier_alignement.py
 
-Principe : si les visages sont alignés, l'image MOYENNE du dataset est un
-visage net — yeux, nez et bouche restent visibles parce qu'ils tombent au même
-endroit dans toutes les images. S'ils ne l'étaient pas, la moyenne serait une
-bouillie grise.
+Principle: if the faces are aligned, the MEAN image of the dataset is a sharp
+face — eyes, nose and mouth stay visible because they fall at the same place
+in every image. If they were not, the mean would be a grey mush.
 
-Le script affiche côte à côte la vraie moyenne et la moyenne obtenue après
-décalage aléatoire des mêmes images : c'est à quoi ressemblerait le dataset
-sans l'alignement fait en amont par les auteurs de CelebA.
+The script displays side by side the true mean and the mean obtained after
+randomly shifting the same images: this is what the dataset would look like
+without the alignment done upstream by the authors of CelebA.
 
-Écrit results/alignement.png
+Writes results/alignement.png
 """
 
 import os
@@ -24,12 +23,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 CACHE = os.environ.get("CELEBA_CACHE", "celeba_64_gray.npy")
-N = 20000          # échantillon : la moyenne est déjà stable bien avant
-DECALAGE = 6       # amplitude du désalignement simulé, en pixels
+N = 20000          # sample: the mean is already stable well before that
+DECALAGE = 6       # amplitude of the simulated misalignment, in pixels
 
 
 def moyenne_desalignee(images, amplitude, graine=0):
-    """Décale chaque image d'un vecteur aléatoire, puis moyenne."""
+    """Shift each image by a random vector, then average."""
     rng = np.random.default_rng(graine)
     dy = rng.integers(-amplitude, amplitude + 1, size=len(images))
     dx = rng.integers(-amplitude, amplitude + 1, size=len(images))
@@ -39,7 +38,7 @@ def moyenne_desalignee(images, amplitude, graine=0):
     return acc / len(images)
 
 
-# mmap_mode : on ne charge pas les 830 Mo pour lire les 20 000 premières.
+# mmap_mode: we do not load the 830 MB just to read the first 20 000.
 images = np.load(CACHE, mmap_mode="r")
 print("cache  : %s" % CACHE)
 print("forme  : %s  dtype %s" % (images.shape, images.dtype))
@@ -52,8 +51,8 @@ moyenne = sub.mean(axis=0)
 ecart = sub.std(axis=0)
 moyenne_floue = moyenne_desalignee(sub, DECALAGE)
 
-# Le contraste de l'image moyenne chiffre l'alignement : plus il est élevé,
-# plus les visages se superposent bien.
+# The contrast of the mean image quantifies the alignment: the higher it is,
+# the better the faces overlap.
 c_align = moyenne.std()
 c_desalign = moyenne_floue.std()
 print("contraste de la moyenne alignée    : %.2f" % c_align)

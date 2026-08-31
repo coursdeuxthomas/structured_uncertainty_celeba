@@ -1,16 +1,16 @@
 """
-Prétraitement de CelebA et Dataset PyTorch pour le débruitage.
+CelebA preprocessing and PyTorch Dataset for denoising.
 
-Chaîne : JPEG couleur 178x218  ->  recadrage centré  ->  64x64  ->  gris  ->
-cache uint8 unique.
+Pipeline: colour JPEG 178x218  ->  centre crop  ->  64x64  ->  grayscale  ->
+single uint8 cache.
 
-Le cache est construit UNE SEULE FOIS (~10 à 20 minutes), puis chargé en
-mémoire à chaque run (~830 Mo en uint8). Relire 200 000 JPEG à chaque epoch
-serait le goulot d'étranglement de tout le projet.
+The cache is built ONLY ONCE (~10 to 20 minutes), then loaded into memory on
+every run (~830 MB as uint8). Re-reading 200,000 JPEGs at every epoch would
+be the bottleneck of the whole project.
 
-Usage :
-    python data.py --build        # construit le cache (à faire une fois)
-    python data.py                # vérifie le cache et sauvegarde un aperçu
+Usage:
+    python data.py --build        # builds the cache (to be done once)
+    python data.py                # checks the cache and saves a preview
 """
 
 import argparse
@@ -23,44 +23,44 @@ from torch.utils.data import Dataset
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-# Chemins surchargeables par variable d'environnement. Sur un cluster, les
-# JPEG (1,4 Go) et le cache (830 Mo) doivent aller sur le scratch et non dans
-# le home, dont le quota est petit :
+# Paths overridable through environment variables. On a cluster, the JPEGs
+# (1.4 GB) and the cache (830 MB) must go to the scratch space and not to the
+# home directory, whose quota is small:
 #     export CELEBA_DIR=$SCRATCH/celeba/img_align_celeba
 #     export CELEBA_CACHE=$SCRATCH/celeba/celeba_64_gray.npy
-RAW_DIR = os.environ.get("CELEBA_DIR", "img_align_celeba")      # JPEG bruts
+RAW_DIR = os.environ.get("CELEBA_DIR", "img_align_celeba")      # raw JPEGs
 CACHE_PATH = os.environ.get("CELEBA_CACHE", "celeba_64_gray.npy")  # uint8 [N,64,64]
 
-IMAGE_SIZE = 64      # résolution finale (article)
-CROP = 148           # recadrage centré avant redimensionnement
+IMAGE_SIZE = 64      # final resolution (paper)
+CROP = 148           # centre crop before resizing
 
-# Split officiel CelebA. Les fichiers sont numérotés séquentiellement et la
-# partition officielle est contiguë :
+# Official CelebA split. The files are numbered sequentially and the official
+# partition is contiguous:
 #   000001 .. 162770  -> train  (partition 0)
 #   162771 .. 182637  -> valid  (partition 1)
 #   182638 .. 202599  -> test   (partition 2)
-# L'article utilise train + valid pour l'entraînement, et test pour le test.
-N_TRAIN = 182637     # = 162 770 + 19 867
+# The paper uses train + valid for training, and test for testing.
+N_TRAIN = 182637     # = 162,770 + 19,867
 N_TOTAL = 202599
 
-# Bruit : sigma est exprimé en unités [0, 1] (convention DnCNN standard).
-# ATTENTION : les images sont normalisées dans [-1, 1], donc l'échelle y est
-# DEUX FOIS plus grande. La conversion est faite dans CelebADataset.
+# Noise: sigma is expressed in [0, 1] units (standard DnCNN convention).
+# CAUTION: the images are normalised to [-1, 1], so the scale there is TWICE
+# as large. The conversion is done in CelebADataset.
 SIGMA = 25.0 / 255.0
 
 
 # --------------------------------------------------------------------------
-# Construction du cache
+# Cache construction
 # --------------------------------------------------------------------------
 def build_cache(raw_dir=RAW_DIR, cache_path=CACHE_PATH,
                 image_size=IMAGE_SIZE, crop=CROP):
     """
-    Parcourt tous les JPEG, les prétraite, et écrit un unique tableau uint8.
+    Walks through every JPEG, preprocesses it, and writes a single uint8 array.
 
-    Recadrage : les images alignées font 178x218. On prend un carré centré de
-    `crop` x `crop` (148 par défaut, convention usuelle pour CelebA 64x64 :
-    cela recentre sur le visage et supprime le fond et le haut du crâne), puis
-    on redimensionne en `image_size`.
+    Cropping: the aligned images are 178x218. We take a centred square of
+    `crop` x `crop` (148 by default, the usual convention for CelebA 64x64:
+    it recentres on the face and removes the background and the top of the
+    skull), then we resize to `image_size`.
     """
     from PIL import Image
 
@@ -75,13 +75,13 @@ def build_cache(raw_dir=RAW_DIR, cache_path=CACHE_PATH,
     for k, nom in enumerate(fichiers):
         img = Image.open(os.path.join(raw_dir, nom))
 
-        # Recadrage centré carré.
+        # Square centre crop.
         largeur, hauteur = img.size
         gauche = (largeur - crop) // 2
         haut = (hauteur - crop) // 2
         img = img.crop((gauche, haut, gauche + crop, haut + crop))
 
-        # Redimensionnement puis niveaux de gris.
+        # Resizing, then grayscale.
         img = img.resize((image_size, image_size), Image.BILINEAR).convert("L")
 
         out[k] = np.asarray(img, dtype=np.uint8)
@@ -95,7 +95,7 @@ def build_cache(raw_dir=RAW_DIR, cache_path=CACHE_PATH,
 
 
 def load_cache(cache_path=CACHE_PATH):
-    """Charge le cache uint8 [N, 64, 64]. Lève une erreur s'il n'existe pas."""
+    """Load the uint8 cache [N, 64, 64]. Raises an error if it is missing."""
     if not os.path.exists(cache_path):
         raise FileNotFoundError(
             "Cache introuvable (%s). Lancez d'abord : python data.py --build"
@@ -109,16 +109,16 @@ def load_cache(cache_path=CACHE_PATH):
 # --------------------------------------------------------------------------
 class CelebADataset(Dataset):
     """
-    Renvoie, pour chaque exemple :
-        x : image propre    [1, 64, 64], float32 dans [-1, 1]
-        y : image bruitée   [1, 64, 64], y = x + sigma * N(0, I)
+    Returns, for each example:
+        x : clean image     [1, 64, 64], float32 in [-1, 1]
+        y : noisy image     [1, 64, 64], y = x + sigma * N(0, I)
 
-    Le bruit est tiré A LA VOLEE à chaque accès. C'est volontaire : le réseau
-    voit une infinité de réalisations du bruit pour une même image, ce qui
-    empêche toute mémorisation du résidu et joue le rôle d'augmentation de
-    données. Le coût est nul (un simple randn).
+    The noise is drawn ON THE FLY at every access. This is deliberate: the
+    network sees an infinity of noise realisations for one and the same
+    image, which prevents any memorisation of the residual and plays the role
+    of data augmentation. The cost is nil (a single randn).
 
-    split : "train" (182 637 premières images) ou "test" (19 962 dernières).
+    split : "train" (first 182,637 images) or "test" (last 19,962).
     """
 
     def __init__(self, split="train", cache_path=CACHE_PATH, sigma=SIGMA,
@@ -132,8 +132,8 @@ class CelebADataset(Dataset):
         else:
             raise ValueError("split doit valoir 'train' ou 'test'")
 
-        # Les images sont dans [-1, 1] : l'écart-type du bruit y est donc le
-        # double de sa valeur exprimée en unités [0, 1].
+        # The images live in [-1, 1]: the standard deviation of the noise is
+        # therefore twice its value expressed in [0, 1] units.
         self.sigma = 2.0 * sigma
         self.split = split
 
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     if args.build:
         build_cache()
 
-    # Vérifications.
+    # Checks.
     train_ds = CelebADataset("train")
     test_ds = CelebADataset("test")
     print("train : %d exemples | test : %d exemples" % (len(train_ds), len(test_ds)))
@@ -171,11 +171,11 @@ if __name__ == "__main__":
     print("sigma effectif (unités [-1,1]) : %.4f" % train_ds.sigma)
     print("bruit mesuré (y - x) std       : %.4f" % (s["y"] - s["x"]).std().item())
 
-    # Le bruit doit être différent à chaque accès.
+    # The noise must be different at every access.
     a, b = train_ds[0]["y"], train_ds[0]["y"]
     print("bruit retiré à chaque accès    :", not torch.equal(a, b))
 
-    # Aperçu visuel.
+    # Visual preview.
     try:
         import matplotlib
         matplotlib.use("Agg")

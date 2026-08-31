@@ -10,22 +10,22 @@
 #SBATCH --output=logs/eval_%j.out
 #SBATCH --requeue
 #
-# Les deux etapes d'evaluation, qui vont ensemble et tiennent en quelques
-# minutes sur GPU : eval_cov.py (NLL, calibration, figures) puis denoise.py
-# (projection du residu, MSE finale).
+# The two evaluation steps, which go together and take a few minutes on
+# GPU: eval_cov.py (NLL, calibration, figures) then denoise.py (residual
+# projection, final MSE).
 #
-# EN DIRECT DANS LE TERMINAL :
+# LIVE IN THE TERMINAL:
 #   srun --partition=short --time=00:30:00 --cpus-per-task=4 --mem=16G --gres=gpu:1 --exclude=node031,node032 bash evaluation.bash
 #
-# EN DIFFERE :
+# DEFERRED:
 #   sbatch evaluation.bash
 #
-# A NE LANCER QU'APRES LES DEUX ENTRAINEMENTS : le structure ET la reference
-# diagonale. Sans checkpoints/covdiag_best.pt, eval_cov.py tourne quand meme
-# mais previent, en gros caracteres, que ses chiffres ne demontrent rien.
+# ONLY TO BE LAUNCHED AFTER BOTH TRAININGS: the structured one AND the
+# diagonal baseline. Without checkpoints/covdiag_best.pt, eval_cov.py still
+# runs but warns, in large letters, that its numbers prove nothing.
 #
-# node031 et node032 sont exclus pour la meme raison que dans les autres
-# scripts : sm_61, incompatible avec le torch de l'env dncnn.
+# node031 and node032 are excluded for the same reason as in the other
+# scripts: sm_61, incompatible with the torch of the dncnn env.
 
 echo "Job started on:"
 hostname
@@ -40,18 +40,18 @@ export CELEBA_DIR=$HOME/data/celeba/img_align_celeba
 export CELEBA_CACHE=$HOME/data/celeba/celeba_64_gray.npy
 
 # --------------------------------------------------------------------------
-# GARDE-FOU GPU, le meme que dans train_cov.bash.
+# GPU GUARD, the same one as in train_cov.bash.
 #
-# Ajoute le 27 aout apres la mort de ce job en huit secondes sur node023.
-# Sur ce cluster, un GPU deja pris (mode exclusif) laisse
-# torch.cuda.is_available() repondre True et affiche meme le nom de la carte :
-# ces appels ne creent pas de contexte CUDA. C'est la PREMIERE allocation qui
-# echoue -- ici dans le torch.load du DnCNN -- avec
+# Added on 27 August after this job died in eight seconds on node023.
+# On this cluster, a GPU already taken (exclusive mode) still lets
+# torch.cuda.is_available() answer True and even displays the name of the
+# card: those calls do not create a CUDA context. It is the FIRST allocation
+# that fails -- here in the torch.load of the DnCNN -- with
 #     CUDA error: CUDA-capable device(s) is/are busy or unavailable
 #
-# On remet le job en file plutot que de le laisser mourir. Il GARDE SON JOBID
-# et repartira sur un autre noeud. SLURM_RESTART_COUNT evite la boucle
-# infinie si le probleme n'est pas un noeud isole mais une limite de compte.
+# We put the job back in the queue rather than letting it die. It KEEPS ITS
+# JOBID and will start again on another node. SLURM_RESTART_COUNT avoids the
+# infinite loop if the problem is not an isolated node but an account limit.
 # --------------------------------------------------------------------------
 if ! python -c "import torch; torch.zeros(1, device='cuda')" 2>/dev/null; then
   echo "GPU inutilisable sur $(hostname) : deja occupe, ou mode exclusif."
@@ -66,16 +66,16 @@ if ! python -c "import torch; torch.zeros(1, device='cuda')" 2>/dev/null; then
 fi
 echo "GPU utilisable, demarrage."
 
-# -u : sortie non tamponnee, meme raison que dans train_dncnn.bash.
-# main.py --evaluation enchaine les deux scripts et s'arrete au premier echec.
+# -u : unbuffered output, same reason as in train_dncnn.bash.
+# main.py --evaluation chains the two scripts and stops at the first failure.
 python -u main.py --evaluation "$@"
 code=$?
 
-# Le code de sortie de python doit remonter a SLURM. Sans le "exit $code"
-# ci-dessous, le dernier "date" reussit et le job est enregistre COMPLETED
-# meme si l'entrainement a plante : sacct affiche alors des succes partout et
-# on cherche la panne ailleurs. C'est exactement ce qui s'est passe le
-# 27 aout avec les six jobs diagonaux morts en huit secondes.
+# Python's exit code has to make it back up to SLURM. Without the "exit $code"
+# below, the last "date" succeeds and the job is recorded as COMPLETED even
+# if the training crashed: sacct then shows successes everywhere and you go
+# hunting for the failure somewhere else. That is exactly what happened on
+# 27 August with the six diagonal jobs that died in eight seconds.
 echo "Job finished:"
 date
 exit $code

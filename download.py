@@ -1,6 +1,6 @@
 import os
 os.environ["KAGGLE_USERNAME"] = "votre_pseudo"
-os.environ["KAGGLE_KEY"] = "votre_cle"        # les 2 champs de kaggle.json
+os.environ["KAGGLE_KEY"] = "votre_cle"        # the 2 fields in kaggle.json
 
 import kaggle
 kaggle.api.dataset_download_files(
